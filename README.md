@@ -14,7 +14,7 @@ int main(int argc, char *argv[]) {
 }
 ```
 
-# Setting Up a Client
+# Setting Up a Pilot Client
 ```c++
 #include "osats.h"
 
