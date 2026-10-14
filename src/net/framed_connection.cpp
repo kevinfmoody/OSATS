@@ -28,15 +28,13 @@ bool FramedConnection::readable(
                    inbox_.begin() + static_cast<std::ptrdiff_t>(consumed));
     }
 
-    // Soft backpressure: stop reading if peer is flooding us.
-    if (inbox_.size() > (1u << 20)) {
-      return false;
-    }
+    if (inbox_.size() > (1u << 20)) return false;
   }
   return true;
 }
 
 bool FramedConnection::writable() {
+  std::lock_guard lock(mu_);
   while (!outbox_.empty()) {
     auto& front = outbox_.front();
     const int n = socket_.sendSome(front.data() + out_offset_,

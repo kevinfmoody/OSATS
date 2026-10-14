@@ -8,6 +8,7 @@
 #include <string>
 #include <thread>
 
+// Minimal non-interactive demo client (see osats-cli for the full UI).
 int main(int argc, char** argv) {
   if (argc < 3) {
     std::cerr << "Usage: osats-client <host> <port> [callsign]\n";
@@ -18,34 +19,46 @@ int main(int argc, char** argv) {
   std::string callsign = argc >= 4 ? argv[3] : ("N" + std::to_string(::getpid()));
 
   osats::Client client;
+  std::cout << std::unitbuf;
+  client.onAnnounce([](const std::string& n, const std::string& v) {
+    std::cout << "announce " << n << " " << v << "\n";
+  });
   client.onPeerUpdate([](const osats::Peer& peer) {
-    std::cout << "peer " << peer.callsign << " id=" << peer.id
-              << " lat=" << peer.position.latitude_deg
+    std::cout << "peer " << peer.callsign << " lat=" << peer.position.latitude_deg
               << " lon=" << peer.position.longitude_deg << "\n";
   });
-  client.onPeerRemove([](osats::EntityId id) {
-    std::cout << "peer removed id=" << id << "\n";
+  client.onText([](const osats::TextEvent& ev) {
+    std::cout << "text [" << ev.from << "] " << ev.text << "\n";
   });
   client.onError([](osats::ErrorCode code, const std::string& msg) {
     std::cerr << "error " << static_cast<int>(code) << ": " << msg << "\n";
   });
 
-  std::cout << std::unitbuf;
   try {
-    client.connect(host, port, callsign);
+    client.connect(host, port, callsign, osats::Role::Pilot, "Demo Pilot");
     std::cout << "connected as " << callsign << " id=" << client.entityId() << "\n";
+    client.tuneRadio(122800);
+    client.requestMetar("KSFO");
 
     osats::Position pos;
     pos.latitude_deg = 37.6213;
     pos.longitude_deg = -122.3790;
-    pos.altitude_ft = 0;
-    pos.groundspeed_kt = 0;
-    pos.heading_deg = 90;
+    pos.squawk = 1200;
+
+    osats::FlightPlan fp;
+    fp.departure = "KSFO";
+    fp.arrival = "KLAX";
+    fp.aircraft_type = "B738";
+    fp.cruise_alt_ft = 35000;
+    fp.route = "SSTIK3 FREBY RZS SADDE7";
+    client.sendFlightPlan(fp);
 
     while (client.connected()) {
       client.sendPosition(pos);
       client.sendHeartbeat();
-      pos.longitude_deg += 0.001;  // crawl east
+      pos.longitude_deg += 0.001;
+      pos.groundspeed_kt = 180;
+      pos.heading_deg = 90;
       std::this_thread::sleep_for(std::chrono::seconds(1));
     }
   } catch (const std::exception& ex) {

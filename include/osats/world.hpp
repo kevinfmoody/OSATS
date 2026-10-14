@@ -18,9 +18,10 @@ struct WorldStats {
   std::uint64_t position_updates = 0;
   std::uint64_t peer_updates_sent = 0;
   std::uint64_t peer_removes_sent = 0;
+  std::uint64_t texts_sent = 0;
+  std::uint64_t flight_plans = 0;
 };
 
-// In-memory single-world state with spatial interest management.
 class World {
  public:
   EntityId allocateId() { return next_id_++; }
@@ -29,12 +30,26 @@ class World {
     return callsigns_.count(callsign) != 0;
   }
 
-  AircraftState& spawn(EntityId id, std::string callsign, Role role) {
+  AircraftState* findByCallsign(const std::string& callsign) {
+    auto it = by_callsign_.find(callsign);
+    return it == by_callsign_.end() ? nullptr : get(it->second);
+  }
+
+  const AircraftState* findByCallsign(const std::string& callsign) const {
+    auto it = by_callsign_.find(callsign);
+    return it == by_callsign_.end() ? nullptr : get(it->second);
+  }
+
+  AircraftState& spawn(EntityId id, std::string callsign, Role role,
+                       std::string real_name, std::uint64_t now_ms) {
     AircraftState state;
     state.id = id;
     state.callsign = callsign;
+    state.real_name = std::move(real_name);
     state.role = role;
+    state.connected_ms = now_ms;
     callsigns_.insert(callsign);
+    by_callsign_[callsign] = id;
     auto [it, _] = entities_.emplace(id, std::move(state));
     return it->second;
   }
@@ -43,8 +58,8 @@ class World {
     auto it = entities_.find(id);
     if (it == entities_.end()) return;
     callsigns_.erase(it->second.callsign);
+    by_callsign_.erase(it->second.callsign);
     index_.remove(id);
-    // Clear rate-limit bookkeeping involving this entity.
     eraseRateLimitsFor(id);
     entities_.erase(it);
   }
@@ -70,10 +85,19 @@ class World {
     ++stats_.position_updates;
   }
 
-  // For each interested observer of `subject`, invoke callback if the
-  // distance-tier rate limit allows a send right now.
+  void setFlightPlan(EntityId id, FlightPlan fp) {
+    auto* state = get(id);
+    if (!state) return;
+    state->flight_plan = std::move(fp);
+    ++stats_.flight_plans;
+  }
+
+  void setRadio(EntityId id, std::uint32_t hz) {
+    if (auto* state = get(id)) state->radio_hz = hz;
+  }
+
   void forEachInterestedObserver(
-      EntityId subject, std::uint64_t now_ms,
+      EntityId subject, std::uint64_t now_ms, bool ignore_rate_limit,
       const std::function<void(EntityId observer, geo::InterestTier tier)>& fn) {
     const auto* subj = get(subject);
     if (!subj) return;
@@ -86,24 +110,23 @@ class World {
       const auto* obs = get(observer);
       if (!obs) continue;
 
-      // Observer sees subject if subject is within observer's visibility
-      // (pilots typically same); use max of the two for symmetry.
       const double vis = std::max(obs->visibility_nm, subj->visibility_nm);
       const double dist = geo::distanceNm(obs->position, subj->position);
       const auto tier = geo::classifyTier(dist, vis);
       if (tier == geo::InterestTier::None) continue;
 
-      const auto key = rateKey(observer, subject);
-      const auto min_ms = geo::minIntervalMs(tier);
-      auto& last = last_sent_ms_[key];
-      if (last != 0 && now_ms - last < min_ms) continue;
-      last = now_ms;
+      if (!ignore_rate_limit) {
+        const auto key = rateKey(observer, subject);
+        const auto min_ms = geo::minIntervalMs(tier);
+        auto& last = last_sent_ms_[key];
+        if (last != 0 && now_ms - last < min_ms) continue;
+        last = now_ms;
+      }
       fn(observer, tier);
       ++stats_.peer_updates_sent;
     }
   }
 
-  // Snapshot peers currently visible to observer (used on join).
   void forEachVisibleTo(
       EntityId observer,
       const std::function<void(const AircraftState& peer)>& fn) const {
@@ -121,6 +144,30 @@ class World {
     }
   }
 
+  void forEachOnFrequency(
+      std::uint32_t hz, EntityId except,
+      const std::function<void(const AircraftState&)>& fn) const {
+    for (const auto& [id, ac] : entities_) {
+      (void)id;
+      if (ac.id == except) continue;
+      if (ac.radio_hz == hz) fn(ac);
+    }
+  }
+
+  void forEachController(const std::function<void(const AircraftState&)>& fn) const {
+    for (const auto& [id, ac] : entities_) {
+      (void)id;
+      if (ac.role == Role::Controller) fn(ac);
+    }
+  }
+
+  void forEach(const std::function<void(const AircraftState&)>& fn) const {
+    for (const auto& [id, ac] : entities_) {
+      (void)id;
+      fn(ac);
+    }
+  }
+
   WorldStats stats() const {
     WorldStats s = stats_;
     s.entities = entities_.size();
@@ -128,6 +175,7 @@ class World {
   }
 
   void notePeerRemoveSent() { ++stats_.peer_removes_sent; }
+  void noteTextSent() { ++stats_.texts_sent; }
 
   const std::unordered_map<EntityId, AircraftState>& entities() const {
     return entities_;
@@ -153,6 +201,7 @@ class World {
 
   EntityId next_id_ = 1;
   std::unordered_map<EntityId, AircraftState> entities_;
+  std::unordered_map<std::string, EntityId> by_callsign_;
   std::unordered_set<std::string> callsigns_;
   SpatialIndex index_;
   std::unordered_map<std::uint64_t, std::uint64_t> last_sent_ms_;

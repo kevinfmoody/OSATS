@@ -1,34 +1,38 @@
 # OSATS
 
-**Open Source Air Traffic Server** — a modern, single-world C++ traffic server for pilot and radar clients.
+**Open Source Air Traffic Server** — a 2026-ready, single-world C++ traffic platform for pilot, ATC, and observer clients.
 
-OSATS v2 keeps the original project's goal (realistic multiplayer aircraft traffic for third-party clients) but replaces the early prototype with a portable, interest-managed design meant to avoid the classic “pick a server / melts when busy” failure modes of early-2000s FSD-style networks.
+OSATS takes the *job* of classic FSD networks ([openfsd](https://github.com/renorris/openfsd) / VATSIM) — shared multiplayer world, ranged position broadcast, flight plans, radio text, weather queries — and rebuilds it with a modern binary protocol, interest-managed fanout, and first-class HTTP observability. Clients connect to **one endpoint**. No server picker.
 
-## VATSIM context (research notes)
+Legacy v1 sources live in [`legacy/`](legacy/). Protocol details: [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
-Two common historical complaints about VATSIM:
+## Why not just FSD?
 
-1. **You had to choose which FSD server to connect to**
-2. **Busy airspace felt slow / choppy**
+[openfsd](https://github.com/renorris/openfsd) is an excellent open implementation of the VATSIM-style FSD protocol: plaintext line packets, post-office + R-tree spatial routing, flight plans, METAR, web admin. It’s the right reference for *what an air-traffic network must do*.
 
-### What changed
+OSATS deliberately does **not** speak FSD. It keeps the product surface and replaces the 1990s wire format:
 
-| Issue | Status today | Notes |
-| --- | --- | --- |
-| Manual server selection | **Mostly fixed (UX)** | Since ~2020 VATSIM routes clients automatically via proximity DNS/HTTP (`fsd.connect.vatsim.net` / [vatdns](https://github.com/vatsimnetwork/vatdns)). Modern clients (e.g. vPilot) expose **AUTOMATIC** rather than a server picker. Regional FSD entry points still exist under the hood; users rarely choose them. |
-| Slow updates when crowded | **Partially fixed** | [VATSIM Velocity](https://fselite.net/content/vatsim-velocity-now-available-for-everyone/) (2022) raised nearby position updates from **0.2 Hz → 5 Hz**. Remaining “busy airport is slow” reports are often **client/sim rendering** (injecting many AI models), not the network failing to deliver packets. |
+| Classic FSD (openfsd) | OSATS v2.1 |
+| --- | --- |
+| CSV/`$DI`/`#AP`/`@`/`^` text lines | Versioned length-prefixed binary frames |
+| Manual / proxied FSD entry nodes | Single logical world, one TCP port |
+| Coarse range rebroadcast | Spatial grid + 5 Hz / 1 Hz / 0.2 Hz tiers |
+| Optional web admin | Built-in live map + JSON API |
+| Auth/CERT complexity | Open demo auth hooks (Hello) |
 
-FSD itself is still a late-90s protocol lineage (CSV-ish packets, central message forwarder). VATSIM modernized operations around it; it did not become a greenfield design. That gap is what OSATS v2 targets as an open alternative architecture.
+VATSIM itself has already fixed a lot of the old UX (automatic server selection, Velocity 5 Hz). The remaining opportunity is an open, greenfield protocol that’s easy to extend without NDAs or CSV archaeology.
 
-## Design goals (v2)
+## Features
 
-- **Single logical world** — clients connect to one endpoint; no user-facing server picker
-- **Interest management** — spatial hash grid + distance-tiered send rates (5 Hz / 1 Hz / 0.2 Hz)
-- **Robust sessions** — length-prefixed frames, heartbeats, backpressure, non-fatal I/O errors
-- **Portable** — POSIX `poll()` (Linux/macOS), CMake, C++20
-- **Extensible** — versioned binary protocol, reserved message-type ranges for plugins
-
-Legacy v1 sources are preserved under [`legacy/`](legacy/).
+- **Pilot / ATC / observer** roles
+- **Velocity-aware positions** (pitch/bank/heading + N/E/D ft/s, squawk)
+- **Flight plans** with peer fanout
+- **Radio tune + text** (private, frequency, broadcast, wallop)
+- **Ping/pong**, **client queries** (INFO / FP / ATIS / SERVER), **METAR**
+- **HTTP live map** at `:4401/` plus `/api/v1/traffic` and `/api/v1/status`
+- **Interactive CLI** (`osats-cli`) and simple demo client
+- **Docker** image + compose
+- Idle timeout, backpressure, graceful SIGINT shutdown
 
 ## Quick start
 
@@ -37,81 +41,63 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 
-# terminal 1
-./build/osats-server --port 4400 --verbose
+# terminal 1 — server + live map
+./build/osats-server --port 4400 --http-port 4401 --verbose
+# open http://127.0.0.1:4401/
 
-# terminal 2 / 3
-./build/osats-client 127.0.0.1 4400 N12345
-./build/osats-client 127.0.0.1 4400 N67890
-
-# optional load smoke test
-./build/osats-loadtest 127.0.0.1 4400 50 10
+# terminal 2 — interactive client
+./build/osats-cli
+osats> connect 127.0.0.1 4400 N17XX pilot "Ada Lovelace"
+osats> pos 37.62 -122.38 0 0 90
+osats> radio 122.8
+osats> fp KSFO KLAX B738 I 35000 SSTIK3 FREBY RZS SADDE7
+osats> move 120 180
+osats> radio-say checking in on unicom
+osats> metar KSFO
+osats> peers
 ```
 
-## Protocol (v1)
+Or with Docker:
 
-Frames are little-endian:
-
-```
-[u32 length][u16 type][payload...]
+```bash
+docker compose up --build
 ```
 
-`length` covers `type + payload` (not the length field itself).
+## Binaries
 
-| Type | ID | Purpose |
-| --- | --- | --- |
-| Hello | 1 | magic, version, role, callsign |
-| HelloAck | 2 | magic, version, entity id, tick Hz |
-| Heartbeat | 3 | keepalive |
-| Goodbye | 4 | clean disconnect |
-| Error | 5 | machine code + message |
-| PositionUpdate | 100 | lat/lon/alt/gs/hdg + visibility |
-| PeerUpdate | 101 | other traffic state |
-| PeerRemove | 102 | traffic left range / disconnected |
-| ExtensionBase | 1000+ | reserved |
+| Binary | Purpose |
+| --- | --- |
+| `osats-server` | Traffic server + HTTP map/API |
+| `osats-cli` | Simple interactive pilot/ATC client |
+| `osats-client` | Non-interactive demo loop |
+| `osats-loadtest` | Concurrent client soak tool |
 
-Coordinates use microdegrees on the wire. Roles today: Pilot, Observer, Controller (controller-specific features can extend without breaking pilots).
+## HTTP API
 
-## Architecture
+| Path | Response |
+| --- | --- |
+| `GET /` | Live traffic map (auto-refresh) |
+| `GET /health` | `ok` |
+| `GET /api/v1/status` | Server counters JSON |
+| `GET /api/v1/traffic` | All online entities JSON |
 
-```
-Client ──TCP──► Session (framed I/O)
-                    │
-                    ▼
-                 World ── SpatialIndex (grid)
-                    │
-                    ▼
-          distance-tier rate limiter
-                    │
-                    ▼
-          PeerUpdate / PeerRemove to observers
-```
-
-Broadcast cost scales with **local density**, not global population: each position update queries nearby grid cells and skips sends that are still inside their tier interval.
-
-## Library usage
+## Library sketch
 
 ```cpp
 #include "osats/client.hpp"
 
 osats::Client client;
-client.onPeerUpdate([](const osats::Peer& p) { /* render traffic */ });
-client.connect("traffic.example.net", 4400, "UAL100");
-client.sendPosition({37.62, -122.38, 0, 0, 90});
+client.onText([](const osats::TextEvent& ev){ /* radio */ });
+client.connect("127.0.0.1", 4400, "UAL100", osats::Role::Pilot, "Crew");
+client.tuneRadio(122800);
+client.sendFlightPlan({.flight_rules='I', .aircraft_type="B738",
+                       .departure="KSFO", .arrival="KLAX", .route="DCT"});
+client.sendPosition({.latitude_deg=37.62, .longitude_deg=-122.38, .squawk=2201});
 ```
 
-```cpp
-#include "osats/server.hpp"
+## Roadmap
 
-osats::Server server({.port = 4400, .verbose = true});
-server.run();  // single-world event loop
-```
-
-## Roadmap hooks
-
-The current node is intentionally single-process. The protocol/world split leaves room for:
-
-- auth / CERT integration at Hello
-- controller frequency / text message extensions (`MessageType >= 1000`)
-- horizontal shards with boundary ghosting (still one logical world to clients)
-- UDP fast-path for near-tier position updates
+- Token/JWT auth at Hello (openfsd-style CERT without copying FSD)
+- Controller frequency ownership + handoff messages
+- Optional UDP fast-path for Near-tier positions
+- Horizontal shards with boundary ghosting (still one world to clients)
