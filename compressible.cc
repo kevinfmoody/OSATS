@@ -1,6 +1,8 @@
 #include "compressible.h"
 #include "message.h"
 
+#include <cstring>
+
 namespace OSATS {
   Compressible::Compressible(size_t dataSize, std::string &identifier)
       : dataSize(dataSize), identifier(identifier) {

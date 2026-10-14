@@ -2,6 +2,8 @@
 #include "aircraft.h"
 #include "compressible.h"
 
+#include <cstring>
+
 namespace OSATS {
   Message::Message(MessageType type, Compressible &item) : type(type) {
     this->blobSize = item.getBlobSize();
