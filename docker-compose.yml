@@ -1,0 +1,8 @@
+services:
+  osats:
+    build: .
+    ports:
+      - "4400:4400"
+      - "4401:4401"
+    command: ["--port", "4400", "--http-port", "4401", "--verbose"]
+    restart: unless-stopped

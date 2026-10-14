@@ -1,55 +1,103 @@
 # OSATS
-**An Open Source Air Traffic Server in C++**
 
-OSATS is a platform designed to handle thousands of aircraft and air traffic controllers, facilitating realistic message transmission between them, and allowing for third-party developers to build networks, pilot clients, radar clients, and more.
+**Open Source Air Traffic Server** — a 2026-ready, single-world C++ traffic platform for pilot, ATC, and observer clients.
 
-# Setting Up a Server
-```c++
-#include "server.h"
+OSATS takes the *job* of classic FSD networks ([openfsd](https://github.com/renorris/openfsd) / VATSIM) — shared multiplayer world, ranged position broadcast, flight plans, radio text, weather queries — and rebuilds it with a modern binary protocol, interest-managed fanout, and first-class HTTP observability. Clients connect to **one endpoint**. No server picker.
 
-int main(int argc, char *argv[]) {
-  // Start a server at the port of the provided argument
-  OSATS::Server s(atoi(argv[1]));
-  return 0;
-}
+Legacy v1 sources live in [`legacy/`](legacy/). Protocol details: [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
+
+## Why not just FSD?
+
+[openfsd](https://github.com/renorris/openfsd) is an excellent open implementation of the VATSIM-style FSD protocol: plaintext line packets, post-office + R-tree spatial routing, flight plans, METAR, web admin. It’s the right reference for *what an air-traffic network must do*.
+
+OSATS deliberately does **not** speak FSD. It keeps the product surface and replaces the 1990s wire format:
+
+| Classic FSD (openfsd) | OSATS v2.1 |
+| --- | --- |
+| CSV/`$DI`/`#AP`/`@`/`^` text lines | Versioned length-prefixed binary frames |
+| Manual / proxied FSD entry nodes | Single logical world, one TCP port |
+| Coarse range rebroadcast | Spatial grid + 5 Hz / 1 Hz / 0.2 Hz tiers |
+| Optional web admin | Built-in live map + JSON API |
+| Auth/CERT complexity | Open demo auth hooks (Hello) |
+
+VATSIM itself has already fixed a lot of the old UX (automatic server selection, Velocity 5 Hz). The remaining opportunity is an open, greenfield protocol that’s easy to extend without NDAs or CSV archaeology.
+
+## Features
+
+- **Pilot / ATC / observer** roles
+- **Velocity-aware positions** (pitch/bank/heading + N/E/D ft/s, squawk)
+- **Flight plans** with peer fanout
+- **Radio tune + text** (private, frequency, broadcast, wallop)
+- **Ping/pong**, **client queries** (INFO / FP / ATIS / SERVER), **METAR**
+- **HTTP live map** at `:4401/` plus `/api/v1/traffic` and `/api/v1/status`
+- **Interactive CLI** (`osats-cli`) and simple demo client
+- **Docker** image + compose
+- Idle timeout, backpressure, graceful SIGINT shutdown
+
+## Quick start
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+
+# terminal 1 — server + live map
+./build/osats-server --port 4400 --http-port 4401 --verbose
+# open http://127.0.0.1:4401/
+
+# terminal 2 — interactive client
+./build/osats-cli
+osats> connect 127.0.0.1 4400 N17XX pilot "Ada Lovelace"
+osats> pos 37.62 -122.38 0 0 90
+osats> radio 122.8
+osats> fp KSFO KLAX B738 I 35000 SSTIK3 FREBY RZS SADDE7
+osats> move 120 180
+osats> radio-say checking in on unicom
+osats> metar KSFO
+osats> peers
 ```
 
-# Setting Up a Pilot Client
-```c++
-#include "osats.h"
+Or with Docker:
 
-#include <iostream>
-#include <thread>
-#include <chrono>
-#include <string>
-
-int main(int argc, char *argv[]) {
-  // Obtain a reference to the traffic client
-  OSATS::Client &client = OSATS::Client::getInstance();
-  try {
-    // Generate the "callsign"
-    char *buf = (char *)malloc(8);
-    sprintf(buf, "N%06i", getpid());
-    std::string callsign(buf);
-    // Connect to the traffic server
-    client.connect(argv[1], atoi(argv[2]));
-    // Build an aircraft object
-    std::string identifier(callsign);
-    OSATS::Aircraft aircraft(identifier);
-    aircraft.setPosition(OSATS::Position(0, 0));
-    // Build a message based on the aircraft
-    OSATS::Message message(aircraft);
-    // Keep sending messages to the server
-    while (true) {
-      // Send the aircraft message to the server
-      client.send(message);
-      // Wait five seconds before sending another message
-      std::this_thread::sleep_for(std::chrono::seconds(5));
-    }
-  } catch (std::string err) {
-    // Print out errors if they occur
-    std::cerr << err << std::endl;
-  }
-  return 0;
-}
+```bash
+docker compose up --build
 ```
+
+## Binaries
+
+| Binary | Purpose |
+| --- | --- |
+| `osats-server` | Traffic server + HTTP map/API |
+| `osats-cli` | Simple interactive pilot/ATC client |
+| `osats-client` | Non-interactive demo loop |
+| `osats-loadtest` | Concurrent client soak tool |
+
+## HTTP API
+
+| Path | Response |
+| --- | --- |
+| `GET /` | Live traffic map (auto-refresh) |
+| `GET /health` | `ok` |
+| `GET /api/v1/status` | Server counters JSON |
+| `GET /api/v1/traffic` | All online entities JSON |
+
+## Library sketch
+
+```cpp
+#include "osats/client.hpp"
+
+osats::Client client;
+client.onText([](const osats::TextEvent& ev){ /* radio */ });
+client.connect("127.0.0.1", 4400, "UAL100", osats::Role::Pilot, "Crew");
+client.tuneRadio(122800);
+client.sendFlightPlan({.flight_rules='I', .aircraft_type="B738",
+                       .departure="KSFO", .arrival="KLAX", .route="DCT"});
+client.sendPosition({.latitude_deg=37.62, .longitude_deg=-122.38, .squawk=2201});
+```
+
+## Roadmap
+
+- Token/JWT auth at Hello (openfsd-style CERT without copying FSD)
+- Controller frequency ownership + handoff messages
+- Optional UDP fast-path for Near-tier positions
+- Horizontal shards with boundary ghosting (still one world to clients)

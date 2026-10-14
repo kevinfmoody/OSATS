@@ -1,0 +1,80 @@
+#pragma once
+
+#include "osats/types.hpp"
+
+#include <algorithm>
+#include <cmath>
+
+namespace osats::geo {
+
+inline constexpr double kNmPerDegreeLat = 60.0;
+
+inline double degToRad(double deg) { return deg * M_PI / 180.0; }
+inline double radToDeg(double rad) { return rad * 180.0 / M_PI; }
+inline double nmToDegLat(double nm) { return nm / kNmPerDegreeLat; }
+
+inline void normalizeLon(double& lon) {
+  while (lon < -180.0) lon += 360.0;
+  while (lon > 180.0) lon -= 360.0;
+}
+
+inline double lonScaleAt(double lat_deg) {
+  const double c = std::cos(degToRad(std::clamp(lat_deg, -89.0, 89.0)));
+  return c > 1e-6 ? (1.0 / c) : 1e6;
+}
+
+// Approximate distance squared in "degree-units" comparable to nm^2 after
+// converting nm->deg at the equator (1 deg lat ~= 60 nm).
+inline double distanceNmSquared(const Position& a, const Position& b) {
+  const double scale = 0.5 * (lonScaleAt(a.latitude_deg) + lonScaleAt(b.latitude_deg));
+  double dlat = a.latitude_deg - b.latitude_deg;
+  double dlon = (a.longitude_deg - b.longitude_deg) * scale;
+  if (dlon > 180.0) dlon -= 360.0;
+  if (dlon < -180.0) dlon += 360.0;
+  const double deg2 = dlat * dlat + dlon * dlon;
+  return deg2 * (kNmPerDegreeLat * kNmPerDegreeLat);
+}
+
+inline double distanceNm(const Position& a, const Position& b) {
+  return std::sqrt(distanceNmSquared(a, b));
+}
+
+inline void boundsNm(const Position& pos, double radius_nm,
+                     double& min_lat, double& max_lat,
+                     double& min_lon, double& max_lon) {
+  const double range = nmToDegLat(radius_nm);
+  min_lat = pos.latitude_deg - range;
+  max_lat = pos.latitude_deg + range;
+  const double scale = std::max(lonScaleAt(min_lat), lonScaleAt(max_lat));
+  min_lon = pos.longitude_deg - scale * range;
+  max_lon = pos.longitude_deg + scale * range;
+  normalizeLon(min_lon);
+  normalizeLon(max_lon);
+}
+
+// Interest tiers by distance (nm). Near peers get higher update rates.
+enum class InterestTier : std::uint8_t {
+  Near = 0,   // <= 10 nm
+  Mid = 1,    // <= 30 nm
+  Far = 2,    // <= visibility
+  None = 3,
+};
+
+inline InterestTier classifyTier(double distance_nm, double visibility_nm) {
+  if (distance_nm > visibility_nm) return InterestTier::None;
+  if (distance_nm <= 10.0) return InterestTier::Near;
+  if (distance_nm <= 30.0) return InterestTier::Mid;
+  return InterestTier::Far;
+}
+
+inline std::uint32_t minIntervalMs(InterestTier tier) {
+  switch (tier) {
+    case InterestTier::Near: return 200;   // 5 Hz
+    case InterestTier::Mid: return 1000;   // 1 Hz
+    case InterestTier::Far: return 5000;   // 0.2 Hz
+    case InterestTier::None: return 0;
+  }
+  return 0;
+}
+
+}  // namespace osats::geo
