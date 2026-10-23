@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <chrono>
 #include <csignal>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
@@ -56,6 +57,7 @@ struct Expected {
   std::string callsign;
   std::string city_pair;
   std::string type;
+  std::uint32_t freq = 122800;
 };
 
 std::vector<Expected> parseReady(const std::string& line) {
@@ -74,8 +76,19 @@ std::vector<Expected> parseReady(const std::string& line) {
     Expected e;
     e.callsign = tok.substr(0, eq);
     e.city_pair = tok.substr(eq + 1, slash - (eq + 1));
-    e.type = tok.substr(slash + 1);
-    if (e.callsign.empty() || e.city_pair.empty() || e.type.empty()) {
+    const std::string rest = tok.substr(slash + 1);
+    const auto at = rest.find('@');
+    if (at == std::string::npos) {
+      e.type = rest;
+    } else {
+      e.type = rest.substr(0, at);
+      try {
+        e.freq = static_cast<std::uint32_t>(std::stoul(rest.substr(at + 1)));
+      } catch (const std::exception&) {
+        fail("bad frequency in " + tok);
+      }
+    }
+    if (e.callsign.empty() || e.city_pair.empty() || e.type.empty() || e.freq == 0) {
       fail("incomplete ready token " + tok);
     }
     out.push_back(std::move(e));
@@ -275,6 +288,15 @@ int main(int argc, char** argv) {
       }
     }
     if (expected.size() < 4) fail("traffic launched fewer than 4 aircraft");
+    bool saw_unicom = false;
+    bool saw_pattern = false;
+    for (const auto& e : expected) {
+      if (e.freq == 122800) saw_unicom = true;
+      if (e.freq == 120500) saw_pattern = true;
+    }
+    if (!saw_unicom || !saw_pattern) {
+      fail("ready line should list a 122800 arrival and a 120500 pattern aircraft");
+    }
 
     bool has_arrival = false;
     bool has_departure = false;
@@ -298,7 +320,7 @@ int main(int argc, char** argv) {
         const osats::Peer& peer = it->second;
         if (peer.role != osats::Role::Pilot) return false;
         if (peer.real_name != "OSATS Traffic") return false;
-        if (peer.radio_hz != 122800) return false;
+        if (peer.radio_hz != e.freq) return false;
         // Tracks stay inside about 20 nm of the field, under half a degree.
         const double dlat = peer.position.latitude_deg - self.latitude_deg;
         const double dlon = peer.position.longitude_deg - self.longitude_deg;
@@ -414,8 +436,8 @@ int main(int argc, char** argv) {
       }
     }
 
-    std::cout << "human N17XX saw " << expected.size() << " pilots on 122800:";
-    for (const auto& e : expected) std::cout << " " << e.callsign;
+    std::cout << "human N17XX saw " << expected.size() << " pilots:";
+    for (const auto& e : expected) std::cout << " " << e.callsign << "@" << e.freq;
     std::cout << "\n";
     for (const auto& line : plan_lines) std::cout << "plan " << line << "\n";
     std::cout << "position fanout " << moved_callsign << " " << moved_from.latitude_deg << ","

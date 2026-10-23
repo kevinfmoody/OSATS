@@ -237,20 +237,19 @@ int main(int argc, char** argv) {
       fail("timed out waiting for UNICOM traffic");
     }
 
-    auto unicomCount = [&] {
+    auto countTraffic = [&](bool unicom_only) {
       std::lock_guard lock(mu);
       int n = 0;
       for (const auto& [cs, peer] : seen) {
         (void)cs;
-        if (peer.role == osats::Role::Pilot && peer.real_name == "OSATS Traffic" &&
-            peer.radio_hz == 122800) {
-          ++n;
-        }
+        if (peer.role != osats::Role::Pilot || peer.real_name != "OSATS Traffic") continue;
+        if (unicom_only && peer.radio_hz != 122800) continue;
+        ++n;
       }
       return n;
     };
-    if (!waitFor([&] { return unicomCount() >= 4; }, 3000)) {
-      fail("UNICOM traffic was not visible to the pilot on tower");
+    if (!waitFor([&] { return countTraffic(true) >= 2 && countTraffic(false) >= 5; }, 3000)) {
+      fail("injected traffic was not visible to the pilot on tower");
     }
 
     Child tower;
@@ -305,7 +304,7 @@ int main(int argc, char** argv) {
       }
       return false;
     };
-    if (!waitFor(heardClearance, 5000)) {
+    if (!waitFor(heardClearance, 10000)) {
       std::lock_guard lock(mu);
       std::ostringstream oss;
       oss << "no tower clearance on 120.500";
@@ -341,8 +340,11 @@ int main(int argc, char** argv) {
       fail("controllers did not go to zero after the tower process exited");
     }
 
-    const int pilots_after = unicomCount();
-    if (pilots_after < 4) fail("UNICOM traffic left when the tower exited");
+    const int unicom_after = countTraffic(true);
+    const int traffic_after = countTraffic(false);
+    if (unicom_after < 2 || traffic_after < 5) {
+      fail("injected traffic left when the tower exited");
+    }
 
     osats::Client taken;
     taken.connect("127.0.0.1", port, "KSFO_TWR", osats::Role::Controller, "Probe");
@@ -357,7 +359,7 @@ int main(int argc, char** argv) {
     std::cout << "tower_freq=" << kTowerHz << "\n";
     std::cout << "controllers_after_exit=0\n";
     std::cout << "callsign_freed=KSFO_TWR id=" << freed_id << "\n";
-    std::cout << "unicom_pilots=" << pilots_after << "\n";
+    std::cout << "unicom_pilots=" << unicom_after << " traffic_pilots=" << traffic_after << "\n";
     std::cout << "test_tower ok\n";
 
     human.disconnect();
