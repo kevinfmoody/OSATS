@@ -4,8 +4,10 @@
 
 #include <cmath>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace osats::vhf {
 
@@ -124,5 +126,30 @@ Path evaluate(const Antenna& tx, const Antenna& rx, const ElevationSampler& terr
 Path propagate(const AircraftState& transmitter, const AircraftState& receiver,
                const FacilityTable& facilities, const ElevationSampler& terrain,
                const Params& params = {});
+
+// One tuned station. Controllers radiate from facility; the coordinates are
+// the map blip and are not the antenna.
+struct Transceiver {
+  std::string callsign;
+  Role role = Role::Pilot;
+  double latitude_deg = 0.0;
+  double longitude_deg = 0.0;
+  double altitude_ft = 0.0;
+  std::uint32_t frequency_khz = 0;
+  const FacilitySite* facility = nullptr;
+};
+
+// A candidate above squelch. coupling is propagate's audible coupling.
+struct Heard {
+  std::string callsign;
+  double coupling = 0.0;
+};
+
+// Who hears one transmission, in candidate order. The transmitter is omitted.
+// Frequency must match exactly. Horizon, terrain, and squelch come from propagate.
+std::vector<Heard> hearSet(const Transceiver& transmission,
+                           std::span<const Transceiver> candidates,
+                           const ElevationSampler& terrain,
+                           const Params& params = {});
 
 }  // namespace osats::vhf
