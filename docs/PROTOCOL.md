@@ -44,6 +44,8 @@ Binary, length-prefixed, little-endian. Inspired by the *roles* of openfsd/FSD p
 
 Microdegree lat/lon, altitude ft, GS kt, heading/pitch/bank centidegrees, N/E/D velocity ft/s (`f32`), squawk, XPDR mode (`C`/`S`/`I`), then visibility nm (`u16`) on `PositionUpdate`.
 
+`PeerUpdate` ends with the server receive time of that position, a little-endian `u64` in milliseconds. Clients coast `vn`/`ve`/`vd` from the sample between updates. The tier intervals below are ceilings.
+
 ## Interest management
 
 Servers fan out `PeerUpdate` using a spatial hash grid and distance tiers:

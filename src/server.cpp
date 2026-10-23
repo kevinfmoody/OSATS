@@ -141,6 +141,13 @@ void Server::pollOnce(int timeout_ms) {
                                                              : "connection closed");
     }
   }
+
+  // Frames queued while reading would otherwise wait for the next poll.
+  for (auto& [fd, session] : sessions_by_fd_) {
+    (void)fd;
+    if (session->conn && session->conn->wantsWrite()) session->conn->writable();
+  }
+  if (http_) http_->flushPending();
 }
 
 void Server::sweepIdle(std::uint64_t now_ms) {
@@ -435,7 +442,7 @@ void Server::broadcastPeerUpdate(EntityId subject, bool force) {
   const auto now = nowMs();
   world_.forEachInterestedObserver(
       subject, now, force, [this, state](EntityId observer, geo::InterestTier) {
-        sendTo(observer, encodePeerUpdate(*state));
+        sendTo(observer, encodePeerUpdate(*state, state->last_update_ms));
       });
 }
 
@@ -444,8 +451,8 @@ void Server::publishContact(EntityId subject, EntityId other) {
   const auto* peer = world_.get(other);
   if (!self || !peer) return;
 
-  sendTo(subject, encodePeerUpdate(*peer));
-  sendTo(other, encodePeerUpdate(*self));
+  sendTo(subject, encodePeerUpdate(*peer, peer->last_update_ms));
+  sendTo(other, encodePeerUpdate(*self, self->last_update_ms));
   world_.notePeerUpdateSent();
   world_.notePeerUpdateSent();
   if (peer->flight_plan) {

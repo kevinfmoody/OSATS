@@ -64,6 +64,36 @@ int main() {
 
   CHECK(!tryDecodeFrame(hello.data(), 3, frame, consumed));
 
+  AircraftState ac;
+  ac.id = 7;
+  ac.role = Role::Pilot;
+  ac.callsign = "N17XX";
+  ac.real_name = "Ada";
+  ac.position.latitude_deg = 37.62;
+  ac.position.longitude_deg = -122.38;
+  ac.radio_hz = 122800;
+  const std::uint64_t stamp = 0x1122334455667788ull;
+  auto peer = encodePeerUpdate(ac, stamp);
+  CHECK(peer.size() >= 8);
+  std::uint64_t got_stamp = 0;
+  for (int i = 0; i < 8; ++i) {
+    got_stamp |= static_cast<std::uint64_t>(static_cast<unsigned char>(
+                     peer[peer.size() - 8 + i]))
+                 << (8 * i);
+  }
+  CHECK(got_stamp == stamp);
+  CHECK(tryDecodeFrame(peer.data(), peer.size(), frame, consumed));
+  CHECK(frame.type == MessageType::PeerUpdate);
+  BufferReader pr2(frame.payload, frame.payload_size);
+  CHECK(pr2.readU32() == 7);
+  CHECK(pr2.readU8() == static_cast<std::uint8_t>(Role::Pilot));
+  CHECK(pr2.readString() == "N17XX");
+  CHECK(pr2.readString() == "Ada");
+  (void)readPosition(pr2);
+  CHECK(pr2.readU32() == 122800);
+  CHECK(pr2.readU8() == 0);
+  CHECK(pr2.readU64() == stamp);
+
   std::cout << "test_protocol ok\n";
   return 0;
 }

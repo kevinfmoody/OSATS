@@ -62,11 +62,15 @@ struct Sink {
   std::mutex mu;
   osats::EntityId other = osats::kInvalidEntityId;
   std::vector<osats::EntityId> removed;
+  double sample_lat = 0;
+  std::uint64_t server_time_ms = 0;
 
   void onUpdate(const osats::Peer& peer, const std::string& callsign) {
     if (peer.callsign != callsign) return;
     std::lock_guard lock(mu);
     other = peer.id;
+    sample_lat = peer.position.latitude_deg;
+    server_time_ms = peer.server_time_ms;
   }
 
   void onRemove(osats::EntityId id) {
@@ -82,6 +86,16 @@ struct Sink {
       if (id == other) ++n;
     }
     return n;
+  }
+
+  double sampleLat() {
+    std::lock_guard lock(mu);
+    return sample_lat;
+  }
+
+  std::uint64_t serverTime() {
+    std::lock_guard lock(mu);
+    return server_time_ms;
   }
 };
 
@@ -148,8 +162,10 @@ int main() {
     CHECK(!findCallsign(stationary, "MOVER"));
 
     // Move onto the parked aircraft. It does not transmit again.
+    // North velocity lets the parked client coast between samples.
     Position close = parked;
     close.latitude_deg += 0.01;
+    close.vn_fps = 2000.f;
     mover.sendPosition(close, 50);
     CHECK(waitFor([&] {
       const auto peer = findCallsign(mover, "STATN");
@@ -157,6 +173,16 @@ int main() {
              peer->flight_plan->arrival == "KLAX" && findCallsign(stationary, "MOVER");
     }));
     CHECK(stationary_sink.removesOfOther() == 0);
+    CHECK(stationary_sink.serverTime() != 0);
+    const double sample_lat = stationary_sink.sampleLat();
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    const auto coasting = findCallsign(stationary, "MOVER");
+    CHECK(coasting.has_value());
+    const double deg_per_s =
+        (2000.0 / (geo::kKtToFps * 3600.0)) / geo::kNmPerDegreeLat;
+    const double dlat = coasting->position.latitude_deg - sample_lat;
+    CHECK(dlat > deg_per_s * 0.2);
+    CHECK(dlat < deg_per_s * 1.5);
 
     mover.sendPosition(far_pos, 50);
     CHECK(waitFor([&] {

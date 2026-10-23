@@ -8,6 +8,10 @@
 namespace osats::geo {
 
 inline constexpr double kNmPerDegreeLat = 60.0;
+// 1 knot in feet per second. Shared by the CLI motion model and extrapolation.
+inline constexpr double kKtToFps = 1.68781;
+// Coast at most one far-tier interval past the last sample.
+inline constexpr double kMaxExtrapolateSec = 5.0;
 // Client visibility is clamped to this before any interest test.
 inline constexpr double kMaxVisibilityNm = 100.0;
 
@@ -46,6 +50,20 @@ inline double distanceNmSquared(const Position& a, const Position& b) {
 
 inline double distanceNm(const Position& a, const Position& b) {
   return std::sqrt(distanceNmSquared(a, b));
+}
+
+// Advance a sample by its N/E/D velocity. vd is positive down. dt is clamped
+// so a quiet target does not keep flying after the far-tier ceiling.
+inline void extrapolate(Position& pos, double dt_sec) {
+  if (!(dt_sec > 0.0)) return;
+  if (dt_sec > kMaxExtrapolateSec) dt_sec = kMaxExtrapolateSec;
+  const double ft_per_nm = kKtToFps * 3600.0;
+  const double lat = pos.latitude_deg;
+  pos.latitude_deg += (static_cast<double>(pos.vn_fps) * dt_sec / ft_per_nm) / kNmPerDegreeLat;
+  pos.longitude_deg +=
+      (static_cast<double>(pos.ve_fps) * dt_sec / ft_per_nm) / (kNmPerDegreeLat * cosLat(lat));
+  normalizeLon(pos.longitude_deg);
+  pos.altitude_ft -= static_cast<double>(pos.vd_fps) * dt_sec;
 }
 
 inline void boundsNm(const Position& pos, double radius_nm,

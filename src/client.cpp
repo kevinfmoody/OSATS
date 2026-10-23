@@ -1,4 +1,5 @@
 #include "osats/client.hpp"
+#include "osats/geo.hpp"
 
 #include <poll.h>
 
@@ -7,6 +8,17 @@
 #include <stdexcept>
 
 namespace osats {
+namespace {
+
+std::uint64_t steadyMs() {
+  using clock = std::chrono::steady_clock;
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          clock::now().time_since_epoch())
+          .count());
+}
+
+}  // namespace
 
 Client::~Client() { disconnect(); }
 
@@ -110,7 +122,15 @@ void Client::requestMetar(const std::string& icao) {
 
 std::unordered_map<EntityId, Peer> Client::peers() const {
   std::lock_guard lock(mu_);
-  return peers_;
+  auto out = peers_;
+  const auto now = steadyMs();
+  for (auto& [id, peer] : out) {
+    (void)id;
+    if (peer.received_ms == 0 || now <= peer.received_ms) continue;
+    const double dt = static_cast<double>(now - peer.received_ms) / 1000.0;
+    geo::extrapolate(peer.position, dt);
+  }
+  return out;
 }
 
 std::vector<TextEvent> Client::drainTexts() {
@@ -185,6 +205,8 @@ void Client::handleFrame(const DecodedFrame& frame) {
         peer.position = readPosition(r);
         if (r.remaining() >= 4) peer.radio_hz = r.readU32();
         if (r.remaining() >= 1) (void)r.readU8();  // has_fp flag
+        if (r.remaining() >= 8) peer.server_time_ms = r.readU64();
+        peer.received_ms = steadyMs();
         {
           std::lock_guard lock(mu_);
           auto it = peers_.find(peer.id);
