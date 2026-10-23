@@ -33,6 +33,10 @@ class BufferWriter {
   }
   void writeI32(std::int32_t v) { writeU32(static_cast<std::uint32_t>(v)); }
   void writeI16(std::int16_t v) { writeU16(static_cast<std::uint16_t>(v)); }
+  void writeU64(std::uint64_t v) {
+    writeU32(static_cast<std::uint32_t>(v & 0xffffffffu));
+    writeU32(static_cast<std::uint32_t>((v >> 32) & 0xffffffffu));
+  }
   void writeF32(float v) {
     static_assert(sizeof(float) == 4);
     std::uint32_t bits = 0;
@@ -78,6 +82,11 @@ class BufferReader {
              (static_cast<std::uint16_t>(static_cast<std::uint8_t>(data_[off_ + 1])) << 8);
     off_ += 2;
     return v;
+  }
+  std::uint64_t readU64() {
+    const auto lo = readU32();
+    const auto hi = readU32();
+    return static_cast<std::uint64_t>(lo) | (static_cast<std::uint64_t>(hi) << 32);
   }
   std::uint32_t readU32() {
     need(4);
@@ -264,7 +273,8 @@ inline std::vector<char> encodePositionUpdate(const Position& p, double visibili
   return encodeFrame(MessageType::PositionUpdate, body.data());
 }
 
-inline std::vector<char> encodePeerUpdate(const AircraftState& ac) {
+inline std::vector<char> encodePeerUpdate(const AircraftState& ac,
+                                         std::uint64_t server_time_ms) {
   BufferWriter body;
   body.writeU32(ac.id);
   body.writeU8(static_cast<std::uint8_t>(ac.role));
@@ -273,6 +283,7 @@ inline std::vector<char> encodePeerUpdate(const AircraftState& ac) {
   writePosition(body, ac.position);
   body.writeU32(ac.radio_hz);
   body.writeU8(ac.flight_plan ? 1 : 0);
+  body.writeU64(server_time_ms);
   return encodeFrame(MessageType::PeerUpdate, body.data());
 }
 

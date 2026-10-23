@@ -63,6 +63,8 @@ int main() {
   CHECK(geo::classifyTier(40, 50) == geo::InterestTier::Far);
   CHECK(geo::classifyTier(80, 50) == geo::InterestTier::None);
   CHECK(geo::minIntervalMs(geo::InterestTier::Near) == 200);
+  CHECK(geo::minIntervalMs(geo::InterestTier::Mid) == 1000);
+  CHECK(geo::minIntervalMs(geo::InterestTier::Far) == 5000);
 
   const Position ksfo{37.62, -122.38, 0, 0, 0};
   const Position north{60.0, 0, 0, 0, 0};
@@ -78,6 +80,31 @@ int main() {
     expectOffset(north, leg.nm, 0, leg.nm, leg.tier);
     expectOffset(north, 0, leg.nm, leg.nm, leg.tier);
   }
+
+  // 1 nm/s north for 1 s is 1/60°, and vd positive is down.
+  Position coast{37.62, -122.38, 10000, 0, 0};
+  coast.vn_fps = static_cast<float>(geo::kKtToFps * 3600.0);
+  coast.vd_fps = 25.f;
+  Position stepped = coast;
+  geo::extrapolate(stepped, 1.0);
+  CHECK(std::abs(stepped.latitude_deg - (37.62 + 1.0 / 60.0)) < 1e-6);
+  CHECK(std::abs(stepped.longitude_deg - coast.longitude_deg) < 1e-9);
+  CHECK(std::abs(stepped.altitude_ft - 9975.0) < 1e-3);
+  geo::extrapolate(coast, 0.0);
+  CHECK(std::abs(coast.latitude_deg - 37.62) < 1e-12);
+
+  Position eastward{60.0, 0, 0, 0, 0};
+  eastward.ve_fps = static_cast<float>(geo::kKtToFps * 3600.0);
+  geo::extrapolate(eastward, 1.0);
+  CHECK(std::abs(eastward.longitude_deg - (1.0 / 30.0)) < 1e-5);
+
+  Position held{0, 0, 0, 0, 0};
+  held.vn_fps = static_cast<float>(geo::kKtToFps * 3600.0);
+  Position capped = held;
+  geo::extrapolate(capped, 100.0);
+  Position five = held;
+  geo::extrapolate(five, geo::kMaxExtrapolateSec);
+  CHECK(std::abs(capped.latitude_deg - five.latitude_deg) < 1e-9);
 
   // Date line: 0.2° of longitude is 12 nm, not a trip the long way around.
   Position east{0, 179.9, 0, 0, 0};

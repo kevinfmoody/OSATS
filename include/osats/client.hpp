@@ -24,6 +24,12 @@ struct Peer {
   Position position;
   std::uint32_t radio_hz = 122800;
   std::optional<FlightPlan> flight_plan;
+  // Server steady-clock ms when this position was received. Zero if the
+  // sender did not stamp the frame.
+  std::uint64_t server_time_ms = 0;
+  // Local steady-clock ms when this client parsed the frame. peers() coasts
+  // from here; the stored sample itself is not moved.
+  std::uint64_t received_ms = 0;
 };
 
 struct TextEvent {

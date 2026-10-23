@@ -235,6 +235,15 @@ void HttpApi::onReadable(int fd) {
   }
 }
 
+void HttpApi::flushPending() {
+  std::vector<int> fds;
+  fds.reserve(conns_.size());
+  for (const auto& [fd, c] : conns_) {
+    if (c->out_off < c->out.size()) fds.push_back(fd);
+  }
+  for (int fd : fds) onWritable(fd);
+}
+
 void HttpApi::onWritable(int fd) {
   auto it = conns_.find(fd);
   if (it == conns_.end()) return;

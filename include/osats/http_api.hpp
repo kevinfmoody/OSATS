@@ -28,6 +28,7 @@ class HttpApi {
   void collectPollFds(std::vector<pollfd>& pfds) const;
   void onReadable(int fd);
   void onWritable(int fd);
+  void flushPending();
   void drop(int fd);
 
  private:

@@ -46,7 +46,7 @@ void printHelp() {
   connect <host> <port> <callsign> [role] [name]
       role = pilot|observer|controller (default pilot)
   pos <lat> <lon> [alt] [gs] [hdg] [squawk]
-  move <hdg> <gs>          auto-advance position each second
+  move <hdg> <gs>          auto-advance position at 5 Hz
   stop                     stop auto-move
   radio <freq>             e.g. 122.8
   say <callsign> <text>    private message
@@ -144,11 +144,16 @@ int main(int argc, char** argv) {
   std::atomic<bool> alive{true};
   std::thread ticker([&] {
     while (alive.load()) {
+      const bool moving = st.moving;
+      // Near-tier ceiling. Idle stays at 1 Hz.
+      const int period_ms =
+          moving ? static_cast<int>(osats::geo::minIntervalMs(osats::geo::InterestTier::Near))
+                 : 1000;
       if (client.connected()) {
         try {
-          if (st.moving) {
-            // Advance ~gs knots along heading for 1 second.
-            const double nm = st.move_gs / 3600.0;
+          if (moving) {
+            const double dt = period_ms / 1000.0;
+            const double nm = st.move_gs * dt / 3600.0;
             const double hdg = st.move_hdg * M_PI / 180.0;
             const double dlat = (nm / 60.0) * std::cos(hdg);
             const double dlon =
@@ -158,7 +163,7 @@ int main(int argc, char** argv) {
             st.pos.longitude_deg += dlon;
             st.pos.heading_deg = st.move_hdg;
             st.pos.groundspeed_kt = st.move_gs;
-            const double fps = st.move_gs * 1.68781;
+            const double fps = st.move_gs * osats::geo::kKtToFps;
             st.pos.vn_fps = static_cast<float>(fps * std::cos(hdg));
             st.pos.ve_fps = static_cast<float>(fps * std::sin(hdg));
           }
@@ -167,7 +172,7 @@ int main(int argc, char** argv) {
         } catch (...) {
         }
       }
-      std::this_thread::sleep_for(std::chrono::seconds(1));
+      std::this_thread::sleep_for(std::chrono::milliseconds(period_ms));
     }
   });
 
