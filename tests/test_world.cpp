@@ -86,7 +86,7 @@ int main() {
     world.spawn(s, "CAP", Role::Pilot, "Cap", 0);
     world.spawn(near, "INN", Role::Pilot, "In", 0);
     world.spawn(far_id, "OUT", Role::Pilot, "Out", 0);
-    const double cap = geo::kMaxVisibilityNm;
+    const double cap = geo::kPilotVisibilityNm;
     const Position origin{10, 0, 0, 0, 0};
     const Position inside{10 + (cap - 10.0) / 60.0, 0, 0, 0, 0};
     const Position outside{10 + (cap + 20.0) / 60.0, 0, 0, 0, 0};
@@ -116,6 +116,38 @@ int main() {
     CHECK(!world.watches(s, near));
     CHECK(!world.watches(near, s));
     CHECK(world.severContacts(near).empty());
+  }
+
+  // A controller may look past the pilot cap. Two pilots at 80 nm stay apart.
+  {
+    const auto traffic = world.allocateId();
+    const auto pilot = world.allocateId();
+    const auto atc = world.allocateId();
+    world.spawn(traffic, "TRF", Role::Pilot, "Traffic", 0);
+    world.spawn(pilot, "PLT", Role::Pilot, "Pilot", 0);
+    world.spawn(atc, "ATC", Role::Controller, "Center", 0);
+    const Position origin{20, 0, 0, 0, 0};
+    const Position out80{20 + 80.0 / 60.0, 0, 0, 0, 0};
+    world.updatePosition(traffic, out80, 1000, 6000);
+    const auto pilot_changes = world.updatePosition(pilot, origin, 1000, 6000);
+    CHECK(world.get(pilot) != nullptr);
+    CHECK(std::abs(world.get(pilot)->visibility_nm - geo::kPilotVisibilityNm) < 1e-9);
+    bool pilot_saw = false;
+    for (const auto& ch : pilot_changes) {
+      if (ch.other == traffic && ch.entered) pilot_saw = true;
+    }
+    CHECK(!pilot_saw);
+
+    const auto atc_changes = world.updatePosition(atc, origin, 1000, 6000);
+    CHECK(world.get(atc) != nullptr);
+    CHECK(std::abs(world.get(atc)->visibility_nm - geo::kControllerVisibilityNm) < 1e-9);
+    bool atc_saw = false;
+    for (const auto& ch : atc_changes) {
+      if (ch.other == traffic && ch.entered) atc_saw = true;
+    }
+    CHECK(atc_saw);
+    CHECK(world.watches(atc, traffic));
+    CHECK(world.watches(traffic, atc));
   }
 
   world.despawn(a);

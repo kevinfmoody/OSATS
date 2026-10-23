@@ -1,10 +1,18 @@
 #pragma once
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
 namespace osats::net {
+
+// Peer reset, broke the pipe, or otherwise went away. Callers drop that
+// session. Other hard errors still use std::runtime_error.
+class ConnectionClosed : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
 
 class Socket {
  public:

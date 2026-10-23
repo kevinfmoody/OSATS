@@ -87,7 +87,7 @@ class World {
     auto* state = get(id);
     if (!state) return {};
     state->position = pos;
-    state->visibility_nm = cappedVisibility(visibility_nm);
+    state->visibility_nm = cappedVisibility(state->role, visibility_nm);
     state->last_update_ms = now_ms;
     index_.upsert(id, pos);
     ++stats_.position_updates;
@@ -143,8 +143,8 @@ class World {
       const auto* obs = get(observer);
       if (!obs) continue;
 
-      const double vis = std::max(cappedVisibility(obs->visibility_nm),
-                                  cappedVisibility(subj->visibility_nm));
+      const double vis = std::max(cappedVisibility(obs->role, obs->visibility_nm),
+                                  cappedVisibility(subj->role, subj->visibility_nm));
       const double dist = geo::distanceNm(obs->position, subj->position);
       const auto tier = geo::classifyTier(dist, vis);
       if (tier == geo::InterestTier::None) continue;
@@ -200,8 +200,8 @@ class World {
   }
 
  private:
-  static double cappedVisibility(double visibility_nm) {
-    return std::clamp(visibility_nm, 0.0, geo::kMaxVisibilityNm);
+  static double cappedVisibility(Role role, double visibility_nm) {
+    return std::clamp(visibility_nm, 0.0, geo::visibilityCapNm(role));
   }
 
   static std::uint64_t rateKey(EntityId observer, EntityId subject) {
@@ -219,13 +219,13 @@ class World {
     std::unordered_set<EntityId> now;
     candidates_.clear();
     index_.queryRadius(self->position, geo::kMaxVisibilityNm, candidates_);
-    const double self_vis = cappedVisibility(self->visibility_nm);
+    const double self_vis = cappedVisibility(self->role, self->visibility_nm);
     for (EntityId other_id : candidates_) {
       if (other_id == id) continue;
       const auto* other = get(other_id);
       if (!other) continue;
       const double range =
-          std::max(self_vis, cappedVisibility(other->visibility_nm));
+          std::max(self_vis, cappedVisibility(other->role, other->visibility_nm));
       if (geo::distanceNm(self->position, other->position) <= range) {
         now.insert(other_id);
       }

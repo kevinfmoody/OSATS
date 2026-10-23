@@ -62,6 +62,7 @@ void Server::run() {
       last_stats_log_ms_ = now;
     }
   }
+  shutdownSessions();
 }
 
 void Server::pollOnce(int timeout_ms) {
@@ -143,11 +144,36 @@ void Server::pollOnce(int timeout_ms) {
   }
 
   // Frames queued while reading would otherwise wait for the next poll.
+  // A dead peer here drops that session instead of taking down the process.
+  std::vector<int> write_failed;
   for (auto& [fd, session] : sessions_by_fd_) {
-    (void)fd;
-    if (session->conn && session->conn->wantsWrite()) session->conn->writable();
+    if (!session->conn || !session->conn->wantsWrite()) continue;
+    if (!session->conn->writable()) write_failed.push_back(fd);
+  }
+  for (int fd : write_failed) {
+    auto it = sessions_by_fd_.find(fd);
+    if (it != sessions_by_fd_.end()) disconnect(*it->second, "connection closed");
   }
   if (http_) http_->flushPending();
+}
+
+void Server::shutdownSessions() {
+  for (auto& [fd, session] : sessions_by_fd_) {
+    (void)fd;
+    if (!session->conn) continue;
+    try {
+      session->conn->enqueue(encodeGoodbye("server shutting down"));
+    } catch (const std::exception&) {
+    }
+  }
+  for (auto& [fd, session] : sessions_by_fd_) {
+    (void)fd;
+    if (!session->conn || !session->conn->wantsWrite()) continue;
+    try {
+      session->conn->writable();
+    } catch (const net::ConnectionClosed&) {
+    }
+  }
 }
 
 void Server::sweepIdle(std::uint64_t now_ms) {
@@ -166,7 +192,12 @@ void Server::sweepIdle(std::uint64_t now_ms) {
 
 void Server::acceptNew() {
   while (true) {
-    auto sock = listener_.accept();
+    net::Socket sock;
+    try {
+      sock = listener_.accept();
+    } catch (const std::runtime_error&) {
+      break;
+    }
     if (!sock.valid()) break;
     auto session = std::make_unique<Session>();
     const int fd = sock.fd();
@@ -265,8 +296,17 @@ void Server::handlePosition(Session& session, const DecodedFrame& frame) {
     double vis = config_.default_visibility_nm;
     if (r.remaining() >= 2) vis = static_cast<double>(r.readU16());
 
-    const auto changes =
-        world_.updatePosition(session.entity_id, pos, vis, nowMs());
+    const auto now = nowMs();
+    if (const auto* state = world_.get(session.entity_id)) {
+      const auto min_gap = geo::minIntervalMs(geo::InterestTier::Near);
+      if (state->last_update_ms != 0 && now - state->last_update_ms < min_gap) {
+        session.conn->enqueue(
+            encodeError(ErrorCode::RateLimited, "position rate limited"));
+        return;
+      }
+    }
+
+    const auto changes = world_.updatePosition(session.entity_id, pos, vis, now);
     for (const auto& change : changes) {
       if (change.entered) publishContact(session.entity_id, change.other);
       else retractContact(session.entity_id, change.other);

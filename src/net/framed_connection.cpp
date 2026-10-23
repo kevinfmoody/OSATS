@@ -8,7 +8,12 @@ bool FramedConnection::readable(
     const std::function<void(const DecodedFrame&)>& on_frame) {
   char buf[8192];
   while (true) {
-    const int n = socket_.recvSome(buf, sizeof(buf));
+    int n = 0;
+    try {
+      n = socket_.recvSome(buf, sizeof(buf));
+    } catch (const ConnectionClosed&) {
+      return false;
+    }
     if (n == 0) return false;
     if (n < 0) break;
     inbox_.insert(inbox_.end(), buf, buf + n);
@@ -37,8 +42,12 @@ bool FramedConnection::writable() {
   std::lock_guard lock(mu_);
   while (!outbox_.empty()) {
     auto& front = outbox_.front();
-    const int n = socket_.sendSome(front.data() + out_offset_,
-                                   front.size() - out_offset_);
+    int n = 0;
+    try {
+      n = socket_.sendSome(front.data() + out_offset_, front.size() - out_offset_);
+    } catch (const ConnectionClosed&) {
+      return false;
+    }
     if (n < 0) return true;
     out_offset_ += static_cast<std::size_t>(n);
     if (out_offset_ < front.size()) return true;

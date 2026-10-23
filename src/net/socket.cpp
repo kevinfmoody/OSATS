@@ -17,7 +17,24 @@ namespace osats::net {
 namespace {
 
 [[noreturn]] void throwErrno(const std::string& what) {
-  throw std::runtime_error(what + ": " + std::strerror(errno));
+  const int err = errno;
+  const std::string msg = what + ": " + std::strerror(err);
+  switch (err) {
+    case EPIPE:
+    case ECONNRESET:
+    case ECONNABORTED:
+    case ENOTCONN:
+    case ETIMEDOUT:
+    case ENETRESET:
+    case ENETDOWN:
+    case EHOSTUNREACH:
+    case EHOSTDOWN:
+    case ESHUTDOWN:
+    case ECONNREFUSED:
+      throw ConnectionClosed(msg);
+    default:
+      throw std::runtime_error(msg);
+  }
 }
 
 }  // namespace
@@ -68,17 +85,22 @@ Socket Socket::connectTcp(const std::string& host, std::uint16_t port) {
 }
 
 Socket Socket::accept() {
-  sockaddr_storage addr{};
-  socklen_t len = sizeof(addr);
-  const int fd = ::accept(fd_, reinterpret_cast<sockaddr*>(&addr), &len);
-  if (fd < 0) {
-    if (errno == EAGAIN || errno == EWOULDBLOCK) return Socket{};
+  for (int n = 0; n < 64; ++n) {
+    sockaddr_storage addr{};
+    socklen_t len = sizeof(addr);
+    const int fd = ::accept(fd_, reinterpret_cast<sockaddr*>(&addr), &len);
+    if (fd >= 0) {
+      Socket client(fd);
+      client.setNonBlocking();
+      client.setNoDelay();
+      return client;
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return Socket{};
+    // A handshake on the listen queue died. Drain it and keep the process up.
+    if (errno == ECONNABORTED || errno == EPROTO || errno == ECONNRESET) continue;
     throwErrno("accept");
   }
-  Socket client(fd);
-  client.setNonBlocking();
-  client.setNoDelay();
-  return client;
+  return Socket{};
 }
 
 void Socket::setNonBlocking() {
