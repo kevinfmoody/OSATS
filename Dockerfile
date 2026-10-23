@@ -8,7 +8,9 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
  && ctest --test-dir build --output-on-failure
 
 FROM debian:bookworm-slim
-RUN useradd -r -s /usr/sbin/nologin osats
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -s /usr/sbin/nologin osats
 COPY --from=build /src/build/osats-server /usr/local/bin/osats-server
 COPY --from=build /src/build/osats-cli /usr/local/bin/osats-cli
 COPY --from=build /src/build/osats-client /usr/local/bin/osats-client

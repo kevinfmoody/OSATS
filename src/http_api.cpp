@@ -222,12 +222,17 @@ void HttpApi::onReadable(int fd) {
   if (it == conns_.end()) return;
   Conn& c = *it->second;
   char buf[4096];
-  while (true) {
-    const int n = c.sock.recvSome(buf, sizeof(buf));
-    if (n == 0) { drop(fd); return; }
-    if (n < 0) break;
-    c.in.append(buf, buf + n);
-    if (c.in.size() > (1u << 20)) { drop(fd); return; }
+  try {
+    while (true) {
+      const int n = c.sock.recvSome(buf, sizeof(buf));
+      if (n == 0) { drop(fd); return; }
+      if (n < 0) break;
+      c.in.append(buf, buf + n);
+      if (c.in.size() > (1u << 20)) { drop(fd); return; }
+    }
+  } catch (const net::ConnectionClosed&) {
+    drop(fd);
+    return;
   }
   if (c.in.find("\r\n\r\n") != std::string::npos) {
     handleRequest(c, c.in);
@@ -248,10 +253,15 @@ void HttpApi::onWritable(int fd) {
   auto it = conns_.find(fd);
   if (it == conns_.end()) return;
   Conn& c = *it->second;
-  while (c.out_off < c.out.size()) {
-    const int n = c.sock.sendSome(c.out.data() + c.out_off, c.out.size() - c.out_off);
-    if (n < 0) return;
-    c.out_off += static_cast<std::size_t>(n);
+  try {
+    while (c.out_off < c.out.size()) {
+      const int n = c.sock.sendSome(c.out.data() + c.out_off, c.out.size() - c.out_off);
+      if (n < 0) return;
+      c.out_off += static_cast<std::size_t>(n);
+    }
+  } catch (const net::ConnectionClosed&) {
+    drop(fd);
+    return;
   }
   if (c.closing) drop(fd);
   else {

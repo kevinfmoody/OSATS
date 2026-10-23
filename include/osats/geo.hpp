@@ -12,8 +12,15 @@ inline constexpr double kNmPerDegreeLat = 60.0;
 inline constexpr double kKtToFps = 1.68781;
 // Coast at most one far-tier interval past the last sample.
 inline constexpr double kMaxExtrapolateSec = 5.0;
-// Client visibility is clamped to this before any interest test.
-inline constexpr double kMaxVisibilityNm = 100.0;
+// Pilots and observers stay near the default 50 nm bubble. Controllers may
+// look farther. kMaxVisibilityNm is the widest interest query.
+inline constexpr double kPilotVisibilityNm = 50.0;
+inline constexpr double kControllerVisibilityNm = 100.0;
+inline constexpr double kMaxVisibilityNm = kControllerVisibilityNm;
+
+inline double visibilityCapNm(Role role) {
+  return role == Role::Controller ? kControllerVisibilityNm : kPilotVisibilityNm;
+}
 
 inline double degToRad(double deg) { return deg * M_PI / 180.0; }
 inline double radToDeg(double rad) { return rad * 180.0 / M_PI; }

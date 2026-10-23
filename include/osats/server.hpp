@@ -51,6 +51,7 @@ class Server {
 
   void acceptNew();
   void pollOnce(int timeout_ms);
+  void shutdownSessions();
   void sweepIdle(std::uint64_t now_ms);
   void onFrame(Session& session, const DecodedFrame& frame);
   void handleHello(Session& session, const DecodedFrame& frame);

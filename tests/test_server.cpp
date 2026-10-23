@@ -1,6 +1,13 @@
 #include "osats/client.hpp"
+#include "osats/net/framed_connection.hpp"
+#include "osats/net/socket.hpp"
 #include "osats/server.hpp"
 
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <functional>
@@ -10,7 +17,6 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <unistd.h>
 #include <vector>
 
 #define CHECK(expr)                                                          \
@@ -121,6 +127,125 @@ void connectClient(osats::Client& client, std::uint16_t port, const std::string&
   client.connect("127.0.0.1", port, cs, osats::Role::Pilot, cs);
 }
 
+void testPositionRateLimit() {
+  using namespace osats;
+  RunningServer running;
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  std::atomic<int> limited{0};
+  Client watch;
+  Client mover;
+  watch.onPeerUpdate([](const Peer&) {});
+  mover.onError([&](ErrorCode code, const std::string&) {
+    if (code == ErrorCode::RateLimited) limited.fetch_add(1);
+  });
+  connectClient(watch, running.port, "WATCH");
+  connectClient(mover, running.port, "MOVER2");
+  Position parked{36.0, -120.0, 3000, 0, 90};
+  watch.sendPosition(parked, 40);
+  mover.sendPosition(parked, 40);
+  CHECK(waitFor([&] { return findCallsign(watch, "MOVER2").has_value(); }));
+
+  Position jumped = parked;
+  jumped.latitude_deg += 1.0;
+  mover.sendPosition(jumped, 40);
+  CHECK(waitFor([&] { return limited.load() >= 1; }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  const auto held = findCallsign(watch, "MOVER2");
+  CHECK(held.has_value());
+  CHECK(std::abs(held->position.latitude_deg - parked.latitude_deg) < 0.05);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(250));
+  Position later = parked;
+  later.latitude_deg += 0.02;
+  mover.sendPosition(later, 40);
+  CHECK(waitFor([&] {
+    const auto peer = findCallsign(watch, "MOVER2");
+    return peer && std::abs(peer->position.latitude_deg - later.latitude_deg) < 0.05;
+  }));
+  mover.disconnect();
+  watch.disconnect();
+}
+
+void testResetLeavesServerUp() {
+  using namespace osats;
+  RunningServer running;
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  auto raw = net::Socket::connectTcp("127.0.0.1", running.port);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  linger lin{};
+  lin.l_onoff = 1;
+  lin.l_linger = 0;
+  CHECK(::setsockopt(raw.fd(), SOL_SOCKET, SO_LINGER, &lin, sizeof(lin)) == 0);
+  raw.close();
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  Client survivor;
+  connectClient(survivor, running.port, "SURV");
+  CHECK(survivor.entityId() != kInvalidEntityId);
+  survivor.disconnect();
+}
+
+void testStopSaysGoodbye() {
+  using namespace osats;
+  RunningServer running;
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  auto raw = net::Socket::connectTcp("127.0.0.1", running.port);
+  raw.setNonBlocking();
+  net::FramedConnection conn(std::move(raw));
+  bool acked = false;
+  bool goodbye = false;
+  auto pump = [&](int timeout_ms) {
+    pollfd pfd{conn.fd(), POLLIN, 0};
+    if (conn.wantsWrite()) pfd.events |= POLLOUT;
+    ::poll(&pfd, 1, timeout_ms);
+    if (pfd.revents & POLLIN) {
+      conn.readable([&](const DecodedFrame& frame) {
+        if (frame.type == MessageType::HelloAck) acked = true;
+        if (frame.type == MessageType::Goodbye) goodbye = true;
+      });
+    }
+    if (conn.wantsWrite()) conn.writable();
+  };
+  conn.enqueue(encodeHello("BYE1", Role::Pilot, "Bye"));
+  for (int i = 0; i < 40 && !acked; ++i) pump(50);
+  CHECK(acked);
+  running.server->requestStop();
+  for (int i = 0; i < 40 && !goodbye; ++i) pump(50);
+  CHECK(goodbye);
+}
+
+void testSendOnReset() {
+  using namespace osats;
+  const auto port = static_cast<std::uint16_t>(31000 + (::getpid() % 10000));
+  auto listener = net::Socket::listenTcp(port);
+  auto client = net::Socket::connectTcp("127.0.0.1", port);
+  auto accepted = listener.accept();
+  CHECK(accepted.valid());
+  accepted.setNonBlocking();
+  linger lin{};
+  lin.l_onoff = 1;
+  lin.l_linger = 0;
+  CHECK(::setsockopt(client.fd(), SOL_SOCKET, SO_LINGER, &lin, sizeof(lin)) == 0);
+  client.close();
+  pollfd pfd{accepted.fd(), POLLIN, 0};
+  ::poll(&pfd, 1, 200);
+
+  bool closed = false;
+  for (int i = 0; i < 4 && !closed; ++i) {
+    try {
+      char byte = 'x';
+      const int n = accepted.sendSome(&byte, 1);
+      if (n < 0) {
+        char tmp[16];
+        accepted.recvSome(tmp, sizeof(tmp));
+      }
+    } catch (const net::ConnectionClosed&) {
+      closed = true;
+    }
+  }
+  CHECK(closed);
+}
+
 }  // namespace
 
 int main() {
@@ -197,6 +322,10 @@ int main() {
     CHECK(!findCallsign(stationary, "MOVER"));
 
     stationary.disconnect();
+    testPositionRateLimit();
+    testResetLeavesServerUp();
+    testStopSaysGoodbye();
+    testSendOnReset();
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << "\n";
     return 1;
