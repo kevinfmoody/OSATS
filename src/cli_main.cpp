@@ -55,6 +55,7 @@ void printHelp() {
   fp <dep> <arr> <acft> [rules] [cruise] [route...]
   peers                    list nearby traffic
   info <callsign>
+  plan <callsign>         query a filed flight plan
   metar <icao>
   atis <icao>
   ping
@@ -271,6 +272,14 @@ int main(int argc, char** argv) {
         std::string cs;
         iss >> cs;
         client.query(osats::QueryType::Info, cs);
+      } else if (cmd == "plan") {
+        std::string cs;
+        iss >> cs;
+        if (cs.empty()) {
+          std::cout << "usage: plan <callsign>\n";
+        } else {
+          client.query(osats::QueryType::FlightPlan, cs);
+        }
       } else if (cmd == "metar") {
         std::string icao;
         iss >> icao;

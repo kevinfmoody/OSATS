@@ -71,6 +71,28 @@ docker compose up --build
 | `osats-cli` | Simple interactive pilot/ATC client |
 | `osats-client` | Non-interactive demo loop |
 | `osats-loadtest` | Concurrent client soak tool |
+| `osats-traffic` | Scripted KSFO pilots on 122.800 (UNICOM) |
+
+## Injected traffic
+
+`osats-traffic` is a separate process. It opens one pilot session per aircraft, files a flight plan, flies a scripted path around KSFO, tunes **122.800**, and makes scheduled UNICOM position calls. It does not read peer traffic or answer radio calls. Real name on every session is `OSATS Traffic`.
+
+```bash
+# terminal 1
+./build/osats-server --port 4400 --http-port 4401
+
+# terminal 2 — one human pilot, no controller
+./build/osats-cli
+osats> connect 127.0.0.1 4400 N17XX pilot "Ada Lovelace"
+osats> pos 37.619 -122.375 13 0 280
+osats> radio 122.8
+osats> plan UAL482
+
+# terminal 3
+./build/osats-traffic 127.0.0.1 4400
+```
+
+Stop that process (Ctrl-C, or kill it) and the pilot sees each aircraft leave. A short run is `osats-traffic 127.0.0.1 4400 30`. `test_traffic` covers connect, position fanout, plan query, and `PeerRemove`.
 
 ## HTTP API
 

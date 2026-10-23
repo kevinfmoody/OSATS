@@ -37,9 +37,18 @@ target_link_libraries(osats-cli PRIVATE osats)
 add_executable(osats-loadtest src/loadtest_main.cpp)
 target_link_libraries(osats-loadtest PRIVATE osats)
 
+add_executable(osats-traffic src/traffic_main.cpp)
+target_link_libraries(osats-traffic PRIVATE osats)
+
 enable_testing()
 foreach(t test_geo test_spatial_index test_protocol test_world)
   add_executable(${t} tests/${t}.cpp)
   target_link_libraries(${t} PRIVATE osats)
   add_test(NAME ${t} COMMAND ${t})
 endforeach()
+
+add_executable(test_traffic tests/test_traffic.cpp)
+target_link_libraries(test_traffic PRIVATE osats)
+add_dependencies(test_traffic osats-traffic)
+add_test(NAME test_traffic COMMAND test_traffic $<TARGET_FILE:osats-traffic>)
+set_tests_properties(test_traffic PROPERTIES TIMEOUT 30)
