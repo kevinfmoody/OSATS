@@ -1,5 +1,6 @@
 #include "osats/world.hpp"
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <set>
@@ -56,6 +57,66 @@ int main() {
     observers.insert(obs);
   });
   CHECK(observers.count(b) == 1);
+
+  // The larger bubble wins. A's own 10 nm range would miss B at 25 nm.
+  {
+    const auto s = world.allocateId();
+    const auto t = world.allocateId();
+    world.spawn(s, "SSS", Role::Pilot, "Short", 0);
+    world.spawn(t, "TTT", Role::Pilot, "Tall", 0);
+    Position ps{0, 0, 0, 0, 0};
+    Position pt{0, 25.0 / 60.0, 0, 0, 0};
+    world.updatePosition(t, pt, 40, 3000);
+    const auto changes = world.updatePosition(s, ps, 10, 3000);
+    bool entered = false;
+    for (const auto& ch : changes) {
+      if (ch.other == t && ch.entered) entered = true;
+    }
+    CHECK(entered);
+    CHECK(world.watches(s, t));
+    CHECK(world.watches(t, s));
+  }
+
+  // Visibility above the server cap cannot pull in traffic past the cap.
+  // Flying out drops the contact, so a later disconnect has nobody left.
+  {
+    const auto s = world.allocateId();
+    const auto near = world.allocateId();
+    const auto far_id = world.allocateId();
+    world.spawn(s, "CAP", Role::Pilot, "Cap", 0);
+    world.spawn(near, "INN", Role::Pilot, "In", 0);
+    world.spawn(far_id, "OUT", Role::Pilot, "Out", 0);
+    const double cap = geo::kMaxVisibilityNm;
+    const Position origin{10, 0, 0, 0, 0};
+    const Position inside{10 + (cap - 10.0) / 60.0, 0, 0, 0, 0};
+    const Position outside{10 + (cap + 20.0) / 60.0, 0, 0, 0, 0};
+    world.updatePosition(far_id, outside, 100000, 4000);
+    world.updatePosition(near, inside, 100000, 4000);
+    const auto changes = world.updatePosition(s, origin, 100000, 4000);
+    CHECK(world.get(s) != nullptr);
+    CHECK(std::abs(world.get(s)->visibility_nm - cap) < 1e-9);
+    bool saw_near = false;
+    bool saw_far = false;
+    for (const auto& ch : changes) {
+      if (ch.other == near && ch.entered) saw_near = true;
+      if (ch.other == far_id && ch.entered) saw_far = true;
+    }
+    CHECK(saw_near);
+    CHECK(!saw_far);
+    CHECK(world.watches(s, near));
+    CHECK(!world.watches(s, far_id));
+
+    const Position flown{0, 5, 0, 0, 0};
+    const auto left = world.updatePosition(near, flown, 50, 5000);
+    bool exited = false;
+    for (const auto& ch : left) {
+      if (ch.other == s && !ch.entered) exited = true;
+    }
+    CHECK(exited);
+    CHECK(!world.watches(s, near));
+    CHECK(!world.watches(near, s));
+    CHECK(world.severContacts(near).empty());
+  }
 
   world.despawn(a);
   CHECK(!world.callsignTaken("AAA"));

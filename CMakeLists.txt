@@ -38,7 +38,7 @@ add_executable(osats-loadtest src/loadtest_main.cpp)
 target_link_libraries(osats-loadtest PRIVATE osats)
 
 enable_testing()
-foreach(t test_geo test_spatial_index test_protocol test_world)
+foreach(t test_geo test_spatial_index test_protocol test_world test_server)
   add_executable(${t} tests/${t}.cpp)
   target_link_libraries(${t} PRIVATE osats)
   add_test(NAME ${t} COMMAND ${t})

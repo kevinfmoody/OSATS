@@ -8,6 +8,8 @@
 namespace osats::geo {
 
 inline constexpr double kNmPerDegreeLat = 60.0;
+// Client visibility is clamped to this before any interest test.
+inline constexpr double kMaxVisibilityNm = 100.0;
 
 inline double degToRad(double deg) { return deg * M_PI / 180.0; }
 inline double radToDeg(double rad) { return rad * 180.0 / M_PI; }
@@ -18,19 +20,26 @@ inline void normalizeLon(double& lon) {
   while (lon > 180.0) lon -= 360.0;
 }
 
-inline double lonScaleAt(double lat_deg) {
+// cos(lat), floored so the poles stay finite. Longitude degrees × cos(lat)
+// are nautical miles on the same scale as latitude degrees.
+inline double cosLat(double lat_deg) {
   const double c = std::cos(degToRad(std::clamp(lat_deg, -89.0, 89.0)));
-  return c > 1e-6 ? (1.0 / c) : 1e6;
+  return c > 1e-6 ? c : 1e-6;
 }
 
-// Approximate distance squared in "degree-units" comparable to nm^2 after
-// converting nm->deg at the equator (1 deg lat ~= 60 nm).
+// Degrees of longitude per degree of latitude. boundsNm uses this to widen
+// the search window; distance uses the inverse (cosLat).
+inline double lonScaleAt(double lat_deg) { return 1.0 / cosLat(lat_deg); }
+
+// Equirectangular distance. Wrap the raw longitude delta before scaling so
+// the date line stays a short hop. 1° latitude = 60 nm.
 inline double distanceNmSquared(const Position& a, const Position& b) {
-  const double scale = 0.5 * (lonScaleAt(a.latitude_deg) + lonScaleAt(b.latitude_deg));
+  const double scale = 0.5 * (cosLat(a.latitude_deg) + cosLat(b.latitude_deg));
   double dlat = a.latitude_deg - b.latitude_deg;
-  double dlon = (a.longitude_deg - b.longitude_deg) * scale;
+  double dlon = a.longitude_deg - b.longitude_deg;
   if (dlon > 180.0) dlon -= 360.0;
   if (dlon < -180.0) dlon += 360.0;
+  dlon *= scale;
   const double deg2 = dlat * dlat + dlon * dlon;
   return deg2 * (kNmPerDegreeLat * kNmPerDegreeLat);
 }

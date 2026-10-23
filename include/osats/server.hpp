@@ -64,6 +64,8 @@ class Server {
   void handleMetar(Session& session, const DecodedFrame& frame);
   void disconnect(Session& session, const std::string& reason);
   void broadcastPeerUpdate(EntityId subject, bool force = false);
+  void publishContact(EntityId subject, EntityId other);
+  void retractContact(EntityId subject, EntityId other);
   void sendTo(EntityId id, std::vector<char> frame);
   void requireAuth(Session& session);
   static std::uint64_t nowMs();
