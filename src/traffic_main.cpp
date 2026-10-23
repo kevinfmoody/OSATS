@@ -25,6 +25,8 @@
 // Aircraft in the pattern tune the tower (120.500), read back a small set of
 // instructions, and copy the result into the positions they publish.
 // Anything else gets one "say again"; the current path stays.
+// The sender is whoever transmitted: the automated tower, a pilot, or a human
+// who has taken KSFO_TWR. Nothing here keys off the bot's name.
 //
 // Usage: osats-traffic <host> <port> [seconds]
 // Omit seconds to run until SIGINT/SIGTERM.

@@ -111,6 +111,19 @@ osats> radio 120.5
 
 A pilot on the field hears "hold short runway 28" from `KSFO_TWR`. Stopping the tower process frees that callsign. `test_tower` covers the clearance, the controller at the field, callsign release, and that the UNICOM fleet is still there.
 
+## Human tower
+
+The chair is the callsign. Stop `osats-tower`, then connect as `KSFO_TWR` with role `controller`, stand at the field, and tune **120.500**. The pattern aircraft are ordinary pilot peers. They read back the same instructions for whoever holds that frequency, and the track changes the same way it does for the automated tower. `test_chair` covers the handoff and a clearance from that session.
+
+```bash
+# stop osats-tower first, with the server and osats-traffic still running
+osats> connect 127.0.0.1 4400 KSFO_TWR controller "Ada Lovelace"
+osats> pos 37.6188 -122.375 13 0 280
+osats> radio 120.5
+osats> peers
+osats> radio-say DAL415, at the field, hold short runway 28
+```
+
 ## HTTP API
 
 | Path | Response |
