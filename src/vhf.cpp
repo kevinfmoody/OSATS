@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <utility>
 
 namespace osats::vhf {
 namespace {
@@ -61,6 +62,24 @@ std::optional<Antenna> resolve(const AircraftState& station, const FacilityTable
     return placeFacilityAntenna(*site, station.radio_hz);
   }
   return placeAircraftAntenna(station.position, station.radio_hz, terrain, params);
+}
+
+AircraftState stationFrom(const Transceiver& tuned, EntityId id) {
+  AircraftState state;
+  state.id = id;
+  state.callsign = tuned.callsign;
+  state.role = tuned.role;
+  state.radio_hz = tuned.frequency_khz;
+  state.position.latitude_deg = tuned.latitude_deg;
+  state.position.longitude_deg = tuned.longitude_deg;
+  state.position.altitude_ft = tuned.altitude_ft;
+  return state;
+}
+
+void noteFacility(FacilityTable& facilities, const Transceiver& tuned) {
+  if (tuned.role == Role::Controller && tuned.facility != nullptr) {
+    facilities.upsert(tuned.callsign, *tuned.facility);
+  }
 }
 
 }  // namespace
@@ -174,6 +193,29 @@ Path propagate(const AircraftState& transmitter, const AircraftState& receiver,
   const auto rx = resolve(receiver, facilities, terrain, params);
   if (!tx || !rx) return path;
   return evaluate(*tx, *rx, terrain, params);
+}
+
+std::vector<Heard> hearSet(const Transceiver& transmission,
+                           std::span<const Transceiver> candidates,
+                           const ElevationSampler& terrain, const Params& params) {
+  FacilityTable facilities;
+  noteFacility(facilities, transmission);
+  const AircraftState tx = stationFrom(transmission, 1);
+
+  std::vector<Heard> heard;
+  EntityId next_id = 2;
+  for (const Transceiver& candidate : candidates) {
+    if (candidate.callsign == transmission.callsign) continue;
+    noteFacility(facilities, candidate);
+    const Path path =
+        propagate(tx, stationFrom(candidate, next_id++), facilities, terrain, params);
+    if (!path.audible) continue;
+    Heard row;
+    row.callsign = candidate.callsign;
+    row.coupling = path.coupling;
+    heard.push_back(std::move(row));
+  }
+  return heard;
 }
 
 }  // namespace osats::vhf

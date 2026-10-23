@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 namespace {
 
@@ -80,6 +81,25 @@ osats::AircraftState station(osats::EntityId id, osats::Role role, const char* c
   s.position.longitude_deg = 0.0;
   s.position.altitude_ft = alt_ft;
   return s;
+}
+
+osats::vhf::Transceiver tuned(const char* callsign, osats::Role role, double north_nm,
+                              double alt_ft, std::uint32_t khz) {
+  osats::vhf::Transceiver t;
+  t.callsign = callsign;
+  t.role = role;
+  t.latitude_deg = north_nm / 60.0;
+  t.longitude_deg = 0.0;
+  t.altitude_ft = alt_ft;
+  t.frequency_khz = khz;
+  return t;
+}
+
+bool containsCallsign(const std::vector<osats::vhf::Heard>& rows, const char* callsign) {
+  for (const auto& row : rows) {
+    if (row.callsign == callsign) return true;
+  }
+  return false;
 }
 
 osats::vhf::Antenna antennaAt(double north_nm, double height_ft, std::uint32_t khz) {
@@ -400,6 +420,93 @@ void testWeakerTowardTheHorizonAndSquelch() {
   CHECK_PATH(edge.coupling == 0.0, edge);
 }
 
+void testHearSetWorkedPicture() {
+  // Same geometry as the pair tests: ramp hears, the ridge blocks, the high
+  // aircraft hears, and the other frequency is absent. Candidate order is kept.
+  SyntheticRidge ridge;
+  ridge.peak_north_nm = 3.0;
+  ridge.half_width_nm = 2.0;
+  ridge.peak_ft = 400.0;
+
+  osats::vhf::FacilitySite site;
+  site.mast_height_ft = 80.0;
+
+  auto tower = tuned("TWR", osats::Role::Controller, 600.0, 40000.0, kTowerKhz);
+  tower.longitude_deg = 10.0;
+  tower.facility = &site;
+
+  const auto behind = tuned("BEHIND", osats::Role::Pilot, 6.0, 0.0, kTowerKhz);
+  const auto off = tuned("OFF", osats::Role::Pilot, -1.0, 0.0, kUnicomKhz);
+  const auto high = tuned("HIGH", osats::Role::Pilot, 30.0, 18000.0, kTowerKhz);
+  const auto ramp = tuned("RAMP", osats::Role::Pilot, -1.0, 0.0, kTowerKhz);
+  const osats::vhf::Transceiver candidates[] = {behind, off, high, ramp, tower};
+  const auto heard = osats::vhf::hearSet(tower, candidates, ridge);
+
+  CHECK(heard.size() == 2);
+  CHECK(heard[0].callsign == "HIGH");
+  CHECK(heard[1].callsign == "RAMP");
+  CHECK(heard[0].coupling > 0.7);
+  CHECK(heard[1].coupling > 0.9);
+  CHECK(heard[1].coupling > heard[0].coupling);
+  CHECK(!containsCallsign(heard, "BEHIND"));
+  CHECK(!containsCallsign(heard, "OFF"));
+  CHECK(!containsCallsign(heard, "TWR"));
+
+  osats::vhf::FacilityTable facilities;
+  facilities.upsert("TWR", site);
+  osats::AircraftState tx;
+  tx.id = 1;
+  tx.callsign = "TWR";
+  tx.role = osats::Role::Controller;
+  tx.radio_hz = kTowerKhz;
+  tx.position.latitude_deg = tower.latitude_deg;
+  tx.position.longitude_deg = tower.longitude_deg;
+  tx.position.altitude_ft = tower.altitude_ft;
+  auto as_state = [](const osats::vhf::Transceiver& t, osats::EntityId id) {
+    osats::AircraftState state;
+    state.id = id;
+    state.callsign = t.callsign;
+    state.role = t.role;
+    state.radio_hz = t.frequency_khz;
+    state.position.latitude_deg = t.latitude_deg;
+    state.position.longitude_deg = t.longitude_deg;
+    state.position.altitude_ft = t.altitude_ft;
+    return state;
+  };
+  const auto high_path = osats::vhf::propagate(tx, as_state(high, 4), facilities, ridge);
+  const auto ramp_path = osats::vhf::propagate(tx, as_state(ramp, 2), facilities, ridge);
+  CHECK(high_path.audible && ramp_path.audible);
+  CHECK(std::abs(heard[0].coupling - high_path.coupling) < 1e-12);
+  CHECK(std::abs(heard[1].coupling - ramp_path.coupling) < 1e-12);
+}
+
+void testTwoTransmittersOnlyMatchingFrequency() {
+  // Both transmitters are close to both receivers. Each hear-set keeps only
+  // the receiver on that transmission's frequency.
+  osats::vhf::ConstantElevation sea(0.0);
+  const auto on_tower = tuned("T118", osats::Role::Pilot, 0.0, 500.0, kTowerKhz);
+  const auto on_unicom = tuned("T122", osats::Role::Pilot, 0.15, 500.0, kUnicomKhz);
+  const auto hear_tower = tuned("R118", osats::Role::Pilot, 0.4, 500.0, kTowerKhz);
+  const auto hear_unicom = tuned("R122", osats::Role::Pilot, 0.5, 500.0, kUnicomKhz);
+  const osats::vhf::Transceiver candidates[] = {hear_tower, hear_unicom, on_tower, on_unicom};
+
+  const auto tower_set = osats::vhf::hearSet(on_tower, candidates, sea);
+  CHECK(tower_set.size() == 1);
+  CHECK(tower_set[0].callsign == "R118");
+  CHECK(tower_set[0].coupling > 0.9);
+  CHECK(!containsCallsign(tower_set, "R122"));
+  CHECK(!containsCallsign(tower_set, "T122"));
+  CHECK(!containsCallsign(tower_set, "T118"));
+
+  const auto unicom_set = osats::vhf::hearSet(on_unicom, candidates, sea);
+  CHECK(unicom_set.size() == 1);
+  CHECK(unicom_set[0].callsign == "R122");
+  CHECK(unicom_set[0].coupling > 0.9);
+  CHECK(!containsCallsign(unicom_set, "R118"));
+  CHECK(!containsCallsign(unicom_set, "T118"));
+  CHECK(!containsCallsign(unicom_set, "T122"));
+}
+
 void testGrazingRidgeIsWeaker() {
   osats::vhf::ConstantElevation sea(0.0);
   SyntheticRidge ridge;
@@ -431,6 +538,8 @@ int main() {
   testDifferentFrequencyIsNotAVoicePath();
   testHorizonUsesHeightAboveLocalGround();
   testWeakerTowardTheHorizonAndSquelch();
+  testHearSetWorkedPicture();
+  testTwoTransmittersOnlyMatchingFrequency();
   testGrazingRidgeIsWeaker();
   std::cout << "test_vhf ok\n";
   return 0;
