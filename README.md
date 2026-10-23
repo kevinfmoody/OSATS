@@ -70,7 +70,31 @@ docker compose up --build
 | `osats-server` | Traffic server + HTTP map/API |
 | `osats-cli` | Simple interactive pilot/ATC client |
 | `osats-client` | Non-interactive demo loop |
-| `osats-loadtest` | Concurrent client soak tool |
+| `osats-loadtest` | Soak tool: peer-update age, fanout bytes, server CPU |
+
+## Load measurement
+
+`osats-loadtest` runs two geometries against one server and logs, for each:
+
+- peer-update age, p50 and p99
+- delivered `PeerUpdate` bytes (`fanout_bytes`, plus `fanout_Bps`)
+- `osats-server` process CPU (`server_cpu_pct`, where 100 is one core)
+
+`terminal` packs every client into a 2 nm box at KSFO so pairs stay in the near tier. `spread` places them on a north-south line 20 nm apart (neighbors at mid, two hops at far, three hops outside 50 nm). Both use the same client count, a 200 ms send interval, and 50 nm visibility. The tool stamps a sample counter in the existing squawk field so age can be matched without a protocol change. Age is send to receive on this client, so it includes the client's 50 ms poll on the way out and back. The tool does not change server fanout.
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j --target osats-server osats-loadtest
+
+# spawn the server, then measure (stdout is the two result lines)
+./build/osats-loadtest --server ./build/osats-server --clients 8 --seconds 3
+
+# or attach to a server that is already listening
+./build/osats-server --port 4400 --no-http
+./build/osats-loadtest 127.0.0.1 4400 8 3
+```
+
+`--layout terminal` or `--layout spread` runs one geometry. The positional form runs both.
 
 ## HTTP API
 
