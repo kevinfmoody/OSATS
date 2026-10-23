@@ -71,12 +71,14 @@ docker compose up --build
 | `osats-cli` | Simple interactive pilot/ATC client |
 | `osats-client` | Non-interactive demo loop |
 | `osats-loadtest` | Concurrent client soak tool |
-| `osats-traffic` | Scripted KSFO pilots on 122.800 (UNICOM) |
+| `osats-traffic` | KSFO pilots: pattern on 120.500 reads back, arrivals stay on 122.800 |
 | `osats-tower` | KSFO tower controller on 120.500 |
 
 ## Injected traffic
 
-`osats-traffic` is a separate process. It opens one pilot session per aircraft, files a flight plan, flies a scripted path around KSFO, tunes **122.800**, and makes scheduled UNICOM position calls. It does not read peer traffic or answer radio calls. Real name on every session is `OSATS Traffic`.
+`osats-traffic` is a separate process. It opens one pilot session per aircraft and files a flight plan. Real name on every session is `OSATS Traffic`.
+
+Arrivals (AAL142, UAL482) stay open-loop on **122.800** and make scheduled UNICOM calls. Pattern aircraft (SWA2104, DAL415, N172SP) tune **120.500**. They read radio text on that frequency and private text addressed to their callsign. Hold short, line up and wait, cleared for takeoff, and cleared to land change the track. A climb or heading is copied into later positions, a squawk into the position squawk, and a contact instruction into the radio tune. Anything else gets one "say again", and the current path stays.
 
 ```bash
 # terminal 1
@@ -93,11 +95,11 @@ osats> plan UAL482
 ./build/osats-traffic 127.0.0.1 4400
 ```
 
-Stop that process (Ctrl-C, or kill it) and the pilot sees each aircraft leave. A short run is `osats-traffic 127.0.0.1 4400 30`. `test_traffic` covers connect, position fanout, plan query, and `PeerRemove`.
+Stop that process (Ctrl-C, or kill it) and the pilot sees each aircraft leave. A short run is `osats-traffic 127.0.0.1 4400 30`. `test_traffic` covers connect, position fanout, plan query, and `PeerRemove`. `test_readback` covers readback and track changes for both `osats-tower` and a human client.
 
 ## Automated tower
 
-`osats-tower` is a second process. It connects as controller `KSFO_TWR` (`OSATS Tower`), stands at the KSFO field with 30 nm visibility, and tunes the published tower frequency **120.500** (`120500`). From the pilots interest delivers on that frequency, it sends a fixed set of text clearances (hold short, line up and wait, cleared for takeoff, cleared to land, runway heading, enter left downwind). It does not read replies. The UNICOM aircraft stay on 122.800 and are not required to comply.
+`osats-tower` is a second process. It connects as controller `KSFO_TWR` (`OSATS Tower`), stands at the KSFO field with 30 nm visibility, and tunes the published tower frequency **120.500** (`120500`). From the pilots interest delivers on that frequency, it sends a fixed set of text clearances (hold short, line up and wait, cleared for takeoff, cleared to land, runway heading, enter left downwind). It does not read replies. Pattern aircraft on 120.500 read the clearances they understand and follow them. UNICOM arrivals stay on 122.800 and stay scripted.
 
 ```bash
 # with the server and osats-traffic already running
