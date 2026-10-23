@@ -258,18 +258,11 @@ void Server::handlePosition(Session& session, const DecodedFrame& frame) {
     double vis = config_.default_visibility_nm;
     if (r.remaining() >= 2) vis = static_cast<double>(r.readU16());
 
-    const bool first = world_.get(session.entity_id) &&
-                       world_.get(session.entity_id)->last_update_ms == 0;
-    world_.updatePosition(session.entity_id, pos, vis, nowMs());
-
-    if (first) {
-      world_.forEachVisibleTo(session.entity_id, [this, &session](const AircraftState& peer) {
-        session.conn->enqueue(encodePeerUpdate(peer));
-        if (peer.flight_plan) {
-          session.conn->enqueue(
-              encodeFlightPlanUpdate(peer.id, peer.callsign, *peer.flight_plan));
-        }
-      });
+    const auto changes =
+        world_.updatePosition(session.entity_id, pos, vis, nowMs());
+    for (const auto& change : changes) {
+      if (change.entered) publishContact(session.entity_id, change.other);
+      else retractContact(session.entity_id, change.other);
     }
     broadcastPeerUpdate(session.entity_id);
   } catch (const std::exception& ex) {
@@ -446,6 +439,36 @@ void Server::broadcastPeerUpdate(EntityId subject, bool force) {
       });
 }
 
+void Server::publishContact(EntityId subject, EntityId other) {
+  const auto* self = world_.get(subject);
+  const auto* peer = world_.get(other);
+  if (!self || !peer) return;
+
+  sendTo(subject, encodePeerUpdate(*peer));
+  sendTo(other, encodePeerUpdate(*self));
+  world_.notePeerUpdateSent();
+  world_.notePeerUpdateSent();
+  if (peer->flight_plan) {
+    sendTo(subject, encodeFlightPlanUpdate(peer->id, peer->callsign,
+                                           *peer->flight_plan));
+  }
+  if (self->flight_plan) {
+    sendTo(other, encodeFlightPlanUpdate(self->id, self->callsign,
+                                         *self->flight_plan));
+  }
+  const auto now = nowMs();
+  world_.markPeerSent(subject, other, now);
+  world_.markPeerSent(other, subject, now);
+}
+
+void Server::retractContact(EntityId subject, EntityId other) {
+  sendTo(subject, encodePeerRemove(other));
+  sendTo(other, encodePeerRemove(subject));
+  world_.notePeerRemoveSent();
+  world_.notePeerRemoveSent();
+  world_.forgetPeerRate(subject, other);
+}
+
 void Server::sendTo(EntityId id, std::vector<char> frame) {
   auto it = sessions_by_id_.find(id);
   if (it == sessions_by_id_.end() || !it->second->conn) return;
@@ -457,12 +480,11 @@ void Server::disconnect(Session& session, const std::string& reason) {
   if (session.authed) {
     const EntityId id = session.entity_id;
     if (world_.get(id)) {
-      const auto now = nowMs();
-      world_.forEachInterestedObserver(
-          id, now, true, [this, id](EntityId observer, geo::InterestTier) {
-            sendTo(observer, encodePeerRemove(id));
-            world_.notePeerRemoveSent();
-          });
+      const auto watchers = world_.severContacts(id);
+      for (EntityId observer : watchers) {
+        sendTo(observer, encodePeerRemove(id));
+        world_.notePeerRemoveSent();
+      }
     }
     sessions_by_id_.erase(id);
     world_.despawn(id);
