@@ -72,6 +72,7 @@ docker compose up --build
 | `osats-client` | Non-interactive demo loop |
 | `osats-loadtest` | Concurrent client soak tool |
 | `osats-traffic` | Scripted KSFO pilots on 122.800 (UNICOM) |
+| `osats-tower` | KSFO tower controller on 120.500 |
 
 ## Injected traffic
 
@@ -93,6 +94,20 @@ osats> plan UAL482
 ```
 
 Stop that process (Ctrl-C, or kill it) and the pilot sees each aircraft leave. A short run is `osats-traffic 127.0.0.1 4400 30`. `test_traffic` covers connect, position fanout, plan query, and `PeerRemove`.
+
+## Automated tower
+
+`osats-tower` is a second process. It connects as controller `KSFO_TWR` (`OSATS Tower`), stands at the KSFO field with 30 nm visibility, and tunes the published tower frequency **120.500** (`120500`). From the pilots interest delivers on that frequency, it sends a fixed set of text clearances (hold short, line up and wait, cleared for takeoff, cleared to land, runway heading, enter left downwind). It does not read replies. The UNICOM aircraft stay on 122.800 and are not required to comply.
+
+```bash
+# with the server and osats-traffic already running
+./build/osats-tower 127.0.0.1 4400
+
+# human pilot, in osats-cli
+osats> radio 120.5
+```
+
+A pilot on the field hears "hold short runway 28" from `KSFO_TWR`. Stopping the tower process frees that callsign. `test_tower` covers the clearance, the controller at the field, callsign release, and that the UNICOM fleet is still there.
 
 ## HTTP API
 
